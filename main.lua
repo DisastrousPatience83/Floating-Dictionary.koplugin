@@ -4,6 +4,7 @@ local BottomContainer = require("ui/widget/container/bottomcontainer")
 local TopContainer = require("ui/widget/container/topcontainer")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local Font = require("ui/font")
+local FontList = require("fontlist")
 local IconWidget = require("ui/widget/iconwidget")
 local Menu = require("ui/widget/menu")
 local TextWidget = require("ui/widget/textwidget")
@@ -20,6 +21,7 @@ local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local Event = require("ui/event")
 local util = require("util")
+local T = require("ffi/util").template
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local logger = require("logger")
@@ -68,6 +70,10 @@ local SETTING_VISIBLE_ACTIONS = "floatingdictionary_visible_actions"
 local SETTING_ACTIONS_ORDER = "floatingdictionary_actions_order"
 local SETTING_SHOW_EXTERNAL_BUTTONS = "floatingdictionary_show_external_buttons"
 local SETTING_FONT_SIZE_DELTA = "floatingdictionary_font_size_delta"
+-- Name (not path) of a font face the user picked from the settings menu to
+-- always use in the preview, overriding the book/global-CRE font detection
+-- done by getDocFontFamily(). nil/unset means "use the book's font" (default).
+local SETTING_FONT_FAMILY = "floatingdictionary_font_family"
 
 -- How much A+/A- changes the popup's text size by, and how far it can go
 -- in either direction relative to UI_FONT_SIZE. Does not affect the footer
@@ -315,6 +321,12 @@ end
 -- book currently open (as tracked by ReaderFont), then fall back to the
 -- user's global CRE font setting, and finally to our own UI default.
 local function getDocFontFamily(plugin)
+	if G_reader_settings then
+		local override = G_reader_settings:readSetting(SETTING_FONT_FAMILY)
+		if override and override ~= "" then
+			return override
+		end
+	end
 	if plugin and plugin.ui and plugin.ui.font then
 		local family = plugin.ui.font.font_face
 		if family and family ~= "" then
@@ -358,9 +370,78 @@ local function getDocFontFace(plugin, size)
 	return Font:getFace("cfont", size)
 end
 
+-- MuPDF (which renders our HTML popup body) silently ignores a plain
+-- `font-family: 'Some Font'` CSS rule unless that exact name happens to be
+-- one MuPDF already knows internally — this is a documented MuPDF
+-- limitation (naming a system font by name in CSS doesn't work), confirmed
+-- against KOReader's own HtmlBoxWidget behaviour. The only reliable way to
+-- get an arbitrary CRE-known font to actually render is to declare it via
+-- @font-face with `src: url(...)` pointing straight at its file on disk,
+-- then reference that alias instead of the real font name. Same technique
+-- the community's 2-custom-ui-fonts.lua patch uses for dictionary popups.
+local FONT_FACE_ALIAS = "FloatingDictionaryFace"
+
+local function buildFontFaceCss(font_family)
+	if not font_family or font_family == "" then
+		return nil
+	end
+
+	local ok, credoc = pcall(require, "document/credocument")
+	if not ok or not credoc or not credoc.engineInit then
+		return nil
+	end
+	local ok2, cre = pcall(credoc.engineInit, credoc)
+	if not ok2 or not cre or not cre.getFontFaceFilenameAndFaceIndex then
+		return nil
+	end
+
+	local ok3, base_filename = pcall(cre.getFontFaceFilenameAndFaceIndex, font_family)
+	if not ok3 or not base_filename then
+		ok3, base_filename = pcall(cre.getFontFaceFilenameAndFaceIndex, font_family, nil, true)
+	end
+	if not ok3 or not base_filename then
+		return nil
+	end
+
+	local seen = { [base_filename] = true }
+	local css = "@font-face { font-family: '" .. FONT_FACE_ALIAS .. "'; src: url('" .. base_filename .. "') }\n"
+
+	-- Also register the bold/italic/bold-italic variants under the same
+	-- alias when CRE actually has separate files for them, so the popup's
+	-- bold word title and any <em>/<strong> in the definition still look
+	-- right instead of only ever using the regular weight.
+	local variants = {
+		{ bold = false, italic = true, style = "; font-style: italic" },
+		{ bold = true, italic = false, style = "; font-weight: bold" },
+		{ bold = true, italic = true, style = "; font-weight: bold; font-style: italic" },
+	}
+	for _, v in ipairs(variants) do
+		local ok4, path = pcall(cre.getFontFaceFilenameAndFaceIndex, font_family, v.bold, v.italic)
+		if ok4 and path and not seen[path] then
+			seen[path] = true
+			css = css .. "@font-face { font-family: '" .. FONT_FACE_ALIAS .. "'; src: url('" .. path .. "')" .. v.style .. " }\n"
+		end
+	end
+
+	return css
+end
+
+-- Resolves a font family name to what should actually be written into CSS
+-- `font-family` rules: the @font-face block (or "" if none could be built)
+-- plus the name to reference (the alias if the block was built, otherwise
+-- the original name/fallback, which at least keeps prior behaviour for
+-- whatever cases buildFontFaceCss can't resolve).
+local function resolveCssFont(font_family)
+	local face_css = buildFontFaceCss(font_family)
+	if face_css then
+		return face_css, FONT_FACE_ALIAS
+	end
+	return "", font_family or UI_FONT_FACE
+end
+
 local function getBaseCss(font_family)
-	local face = font_family or UI_FONT_FACE
-	return [[
+	local face_css, face = resolveCssFont(font_family)
+	return face_css .. [[
 @page {
     margin: 0;
     font-family: ']] .. face .. [[';
@@ -408,9 +489,9 @@ end
 
 local function getDictionaryPanelCss(result, font_family)
 	local css_justify = G_reader_settings:nilOrTrue("dict_justify") and "text-align: justify;" or ""
-	local face = font_family or UI_FONT_FACE
+	local face_css, face = resolveCssFont(font_family)
 
-	local css = [[
+	local css = face_css .. [[
 @page {
     margin: 0;
     font-family: ']] .. face .. [[';
@@ -536,6 +617,7 @@ local PreviewButton = InputContainer:extend({
 	icon_width = KOREADER_ICON_SIZE,
 	icon_height = KOREADER_ICON_SIZE,
 	align = "center", -- "center" (default, used for footer icons) or "left" (text rows)
+	bold = true, -- text-label buttons are bold by default; pass false for a plain-weight label
 	callback = nil,
 	show_parent = nil,
 })
@@ -576,7 +658,7 @@ function PreviewButton:init()
 		label = TextWidget:new({
 			text = self.text or "",
 			face = self.face or Font:getFace("cfont", UI_FONT_SIZE),
-			bold = true,
+			bold = self.bold,
 			max_width = inner_w,
 			fgcolor = self.disabled and Blitbuffer.COLOR_LIGHT_GRAY or nil,
 		})
@@ -1034,6 +1116,7 @@ end
 local FloatingDictionaryButtonSettingsPopup = InputContainer:extend({
 	body = nil, -- prebuilt VerticalGroup of rows (title, dividers, action rows, external toggle)
 	close_callback = nil,
+	on_swipe = nil, -- optional callback(ges), only fired for swipes landing on the card
 })
 
 function FloatingDictionaryButtonSettingsPopup:init()
@@ -1044,6 +1127,10 @@ function FloatingDictionaryButtonSettingsPopup:init()
 		local range = Geom:new({ x = 0, y = 0, w = screen_width, h = screen_height })
 		self.ges_events = {
 			TapClose = { GestureRange:new({ ges = "tap", range = range }) },
+			-- Same west/east paging gesture FloatingDictionaryPopup uses to
+			-- flip between dictionary results, reused here so a long Font
+			-- tab list can be paged with a swipe instead of only the arrows.
+			SwipePage = { GestureRange:new({ ges = "swipe", range = range }) },
 		}
 	end
 
@@ -1069,11 +1156,15 @@ function FloatingDictionaryButtonSettingsPopup:init()
 end
 
 function FloatingDictionaryButtonSettingsPopup:onShow()
-	UIManager:setDirty(self, "ui")
+	UIManager:setDirty(self, function()
+		return "ui", self.card.dimen
+	end)
 end
 
 function FloatingDictionaryButtonSettingsPopup:onCloseWidget()
-	UIManager:setDirty(nil, "partial")
+	UIManager:setDirty(self, function()
+		return "partial", self.card.dimen
+	end)
 end
 
 function FloatingDictionaryButtonSettingsPopup:onClose()
@@ -1089,6 +1180,18 @@ function FloatingDictionaryButtonSettingsPopup:onTapClose(_arg, ges)
 		return self:onClose()
 	end
 	return false
+end
+
+function FloatingDictionaryButtonSettingsPopup:onSwipePage(_arg, ges)
+	-- Ignore swipes that started outside the card (e.g. dismissing via
+	-- swipe elsewhere on screen shouldn't also page the Font list).
+	if not self.on_swipe or not ges or not ges.direction or not ges.pos then
+		return false
+	end
+	if not (self.card and self.card.dimen and ges.pos:intersectWith(self.card.dimen)) then
+		return false
+	end
+	return self.on_swipe(ges.direction)
 end
 
 -- Plugin lifecycle -----------------------------------------------------------
@@ -1123,6 +1226,18 @@ function FloatingDictionary:addToMainMenu(menu_items)
 				end,
 				callback = function()
 					self:setPreviewEnabled(not self:isPreviewEnabled())
+				end,
+			},
+			{
+				text_func = function()
+					local override = self:getFontFamilyOverride()
+					if override then
+						return T(_("Preview font: %1"), override)
+					end
+					return _("Preview font")
+				end,
+				sub_item_table_func = function()
+					return self:genFontFamilyMenu()
 				end,
 			},
 			{
@@ -1165,6 +1280,92 @@ function FloatingDictionary:setFontSizeDelta(delta)
 	delta = math.max(FONT_SIZE_DELTA_MIN, math.min(FONT_SIZE_DELTA_MAX, delta or 0))
 	G_reader_settings:saveSetting(SETTING_FONT_SIZE_DELTA, delta)
 	return delta
+end
+
+-- Preview font family override -------------------------------------------
+
+-- Returns the font *name* the user picked from the settings menu, or nil if
+-- they haven't picked one (in which case getDocFontFamily() falls back to
+-- the book's font, then the global CRE font, then our own default).
+function FloatingDictionary:getFontFamilyOverride()
+	local name = G_reader_settings:readSetting(SETTING_FONT_FAMILY)
+	if name and name ~= "" then
+		return name
+	end
+	return nil
+end
+
+function FloatingDictionary:setFontFamilyOverride(name)
+	if name and name ~= "" then
+		G_reader_settings:saveSetting(SETTING_FONT_FAMILY, name)
+	else
+		G_reader_settings:delSetting(SETTING_FONT_FAMILY)
+	end
+end
+
+-- Builds the "Preview font" radio-button submenu, listing every font face
+-- CRE knows about (same list ReaderFont's own font menu uses) plus a
+-- "Use book font" entry at the top to go back to the automatic behaviour.
+function FloatingDictionary:genFontFamilyMenu()
+	local items = {}
+
+	table.insert(items, {
+		text = _("Use book font (default)"),
+		radio = true,
+		checked_func = function()
+			return self:getFontFamilyOverride() == nil
+		end,
+		callback = function()
+			self:setFontFamilyOverride(nil)
+		end,
+	})
+
+	local ok, credoc = pcall(require, "document/credocument")
+	if not ok or not credoc or not credoc.engineInit then
+		return items
+	end
+	local ok2, cre = pcall(credoc.engineInit, credoc)
+	if not ok2 or not cre or not cre.getFontFaces then
+		return items
+	end
+
+	local ok3, fonts = pcall(cre.getFontFaces)
+	if not ok3 or not fonts then
+		return items
+	end
+	table.sort(fonts, function(a, b)
+		return a:lower() < b:lower()
+	end)
+
+	for _, font_name in ipairs(fonts) do
+		local font_filename, font_faceindex = cre.getFontFaceFilenameAndFaceIndex(font_name)
+		if not font_filename then
+			font_filename, font_faceindex = cre.getFontFaceFilenameAndFaceIndex(font_name, nil, true)
+		end
+
+		table.insert(items, {
+			text_func = function()
+				local text = font_name
+				if font_filename and font_faceindex and FontList and FontList.getLocalizedFontName then
+					local ok4, localized = pcall(FontList.getLocalizedFontName, FontList, font_filename, font_faceindex)
+					if ok4 and localized then
+						text = localized
+					end
+				end
+				return text
+			end,
+			radio = true,
+			checked_func = function()
+				return self:getFontFamilyOverride() == font_name
+			end,
+			callback = function()
+				self:setFontFamilyOverride(font_name)
+			end,
+		})
+	end
+
+	items.max_per_page = 8
+	return items
 end
 
 function FloatingDictionary:getVisibleActionsSetting()
@@ -1384,11 +1585,26 @@ end
 function FloatingDictionary:showButtonSettingsMenu(on_close)
 	local CHECKBOX_ON = "☑"
 	local CHECKBOX_OFF = "☐"
+	local RADIO_ON = "●"
+	local RADIO_OFF = "○"
 	local ROW_HEIGHT = Screen:scaleBySize(50)
 	local ARROW_WIDTH = Screen:scaleBySize(50)
+	-- Narrower than ARROW_WIDTH since "<<"/">>" is a shorter label than the
+	-- ‹›-style icon chips; keeps the page-number label from getting too
+	-- cramped in between all four pager chips.
+	local JUMP_WIDTH = Screen:scaleBySize(38)
 	local POPUP_WIDTH = math.floor(Screen:getWidth() * 0.82)
+	local TAB_WIDTH = math.floor(POPUP_WIDTH / 2)
 	local row_face = Font:getFace("cfont", UI_FONT_SIZE)
 	local popup
+
+	-- Which of the two tabs is currently shown. Persists only for the
+	-- lifetime of this popup (not saved), so it always opens on "buttons".
+	local current_tab = "buttons"
+	-- Current page within the Font tab's list (reset to 1 every time the
+	-- Font tab is entered). Paginated, rather than scrollable, so the
+	-- popup's box is always exactly the same size as the Buttons tab.
+	local font_page = 1
 
 	local function closePopup()
 		if popup then
@@ -1399,7 +1615,7 @@ function FloatingDictionary:showButtonSettingsMenu(on_close)
 		end
 	end
 
-	local function makeChip(text, width, callback, align)
+	local function makeChip(text, width, callback, align, bold, disabled)
 		return PreviewButton:new({
 			text = text,
 			face = row_face,
@@ -1407,6 +1623,8 @@ function FloatingDictionary:showButtonSettingsMenu(on_close)
 			height = ROW_HEIGHT,
 			align = align or "center",
 			callback = callback,
+			bold = bold,
+			disabled = disabled,
 		})
 	end
 
@@ -1428,18 +1646,64 @@ function FloatingDictionary:showButtonSettingsMenu(on_close)
 		})
 	end
 
+	local function makeBlankRow()
+		return HorizontalGroup:new({ makeChip("", POPUP_WIDTH, nil, "left") })
+	end
+
+	-- Number of rows the Buttons tab shows (fixed for a given install: all
+	-- actions plus the two nav arrows and the external-plugins group, minus
+	-- Vocabulary if that plugin isn't present). Used as the Font tab's page
+	-- size too, so both tabs always render the exact same box size.
+	local function getButtonsTabRowCount()
+		local ordered_actions = self:getOrderedActions()
+		local count = 0
+		for _, action in ipairs(ordered_actions) do
+			if action.id ~= ACTION_VOCABULARY or self:hasVocabBuilder() then
+				count = count + 1
+			end
+		end
+		return count
+	end
+
 	local rebuild -- forward declaration, referenced by row callbacks below
 
-	local function buildRows()
+	-- Header ("Floating Dictionary buttons" + close) plus the two-tab bar
+	-- used by both tabs' content.
+	local function buildHeaderRows()
 		local rows = {}
 
 		table.insert(rows, HorizontalGroup:new({
-			makeChip(_("Floating Dictionary buttons"), POPUP_WIDTH - ARROW_WIDTH, nil, "left"),
+			makeChip(_("Floating Dictionary settings"), POPUP_WIDTH - ARROW_WIDTH, nil, "left"),
 			makeChip("✕", ARROW_WIDTH, function()
 				popup:onClose()
 			end),
 		}))
 		table.insert(rows, makeSeparatorLine())
+
+		-- Active tab is marked with a bullet and bold text; tapping either
+		-- tab (even the active one) just re-renders that tab's content.
+		local buttons_label = (current_tab == "buttons" and "● " or "") .. _("Buttons")
+		local font_label = (current_tab == "font" and "● " or "") .. _("Font")
+		table.insert(rows, HorizontalGroup:new({
+			makeChip(buttons_label, TAB_WIDTH, function()
+				current_tab = "buttons"
+				rebuild()
+			end, "center", current_tab == "buttons"),
+			makeChip(font_label, POPUP_WIDTH - TAB_WIDTH, function()
+				if current_tab ~= "font" then
+					font_page = 1
+				end
+				current_tab = "font"
+				rebuild()
+			end, "center", current_tab == "font"),
+		}))
+		table.insert(rows, makeSeparatorLine())
+
+		return rows
+	end
+
+	local function buildButtonRows()
+		local rows = {}
 
 		local ordered_actions = self:getOrderedActions()
 		local visible_ids = {}
@@ -1509,11 +1773,145 @@ function FloatingDictionary:showButtonSettingsMenu(on_close)
 		return rows
 	end
 
+	-- Reuses genFontFamilyMenu()'s items (built for the native KOReader
+	-- menu) so the font list logic only lives in one place; here we just
+	-- render each item as a full-width tappable row instead. Paginated to
+	-- exactly getButtonsTabRowCount() rows per page (blank rows pad out a
+	-- short last page), so this tab is always the same box size as Buttons.
+	-- Shared by buildFontRows() and the swipe handler so both agree on how
+	-- many pages the Font tab currently has.
+	local function getFontTotalPages()
+		local per_page = math.max(1, getButtonsTabRowCount())
+		local count = #self:genFontFamilyMenu()
+		return math.max(1, math.ceil(count / per_page))
+	end
+
+	local function buildFontRows()
+		local rows = {}
+		local font_items = self:genFontFamilyMenu()
+		local per_page = math.max(1, getButtonsTabRowCount())
+		local total_pages = getFontTotalPages()
+		if font_page > total_pages then
+			font_page = total_pages
+		end
+
+		local start_idx = (font_page - 1) * per_page + 1
+		local end_idx = math.min(#font_items, start_idx + per_page - 1)
+
+		for idx = start_idx, end_idx do
+			local item = font_items[idx]
+			local label = item.text_func and item.text_func() or item.text
+			local checked = item.checked_func and item.checked_func()
+			local marker = checked and RADIO_ON or RADIO_OFF
+
+			table.insert(rows, HorizontalGroup:new({
+				makeChip(
+					string.format("%s  %s", marker, label),
+					POPUP_WIDTH,
+					function()
+						if item.callback then
+							item.callback()
+						end
+						-- Selecting a font shouldn't require closing this
+						-- menu to see it take effect: refresh the dictionary
+						-- popup underneath immediately, then rebuild() puts
+						-- this settings card back on top of it.
+						if on_close then
+							on_close()
+						end
+						rebuild()
+					end,
+					"left"
+				),
+			}))
+			table.insert(rows, makeSeparatorLine())
+		end
+
+		-- Pad a short last page with blank rows so every page (and the
+		-- Buttons tab) renders at exactly the same height.
+		local shown = math.max(0, end_idx - start_idx + 1)
+		for _ = shown + 1, per_page do
+			table.insert(rows, makeBlankRow())
+			table.insert(rows, makeSeparatorLine())
+		end
+
+		if total_pages > 1 then
+			table.insert(rows, HorizontalGroup:new({
+				makeChip("<<", JUMP_WIDTH, function()
+					if font_page > 1 then
+						font_page = 1
+						rebuild()
+					end
+				end, "center", false, font_page <= 1),
+				makeIconChip(ICON_PREVIOUS, ARROW_WIDTH, function()
+					if font_page > 1 then
+						font_page = font_page - 1
+						rebuild()
+					end
+				end),
+				makeChip(
+					string.format("%d / %d", font_page, total_pages),
+					POPUP_WIDTH - 2 * ARROW_WIDTH - 2 * JUMP_WIDTH,
+					nil
+				),
+				makeIconChip(ICON_NEXT, ARROW_WIDTH, function()
+					if font_page < total_pages then
+						font_page = font_page + 1
+						rebuild()
+					end
+				end),
+				makeChip(">>", JUMP_WIDTH, function()
+					if font_page < total_pages then
+						font_page = total_pages
+						rebuild()
+					end
+				end, "center", false, font_page >= total_pages),
+			}))
+		end
+
+		return rows
+	end
+
+	local function buildRows()
+		local rows = buildHeaderRows()
+		if current_tab == "font" then
+			for _, row in ipairs(buildFontRows()) do
+				table.insert(rows, row)
+			end
+		else
+			for _, row in ipairs(buildButtonRows()) do
+				table.insert(rows, row)
+			end
+		end
+		return rows
+	end
+
 	rebuild = function()
 		closePopup()
 		popup = FloatingDictionaryButtonSettingsPopup:new({
 			body = VerticalGroup:new(buildRows()),
 			close_callback = on_close,
+			-- West/east swipe pages the Font list, same convention the
+			-- dictionary popup uses to flip between results. Only wired up
+			-- while the Font tab is showing; ignored on the Buttons tab.
+			on_swipe = function(direction)
+				if current_tab ~= "font" then
+					return false
+				end
+
+				local total_pages = getFontTotalPages()
+				if direction == "west" and font_page < total_pages then
+					font_page = font_page + 1
+					rebuild()
+					return true
+				elseif direction == "east" and font_page > 1 then
+					font_page = font_page - 1
+					rebuild()
+					return true
+				end
+
+				return false
+			end,
 		})
 		UIManager:show(popup)
 	end
@@ -2135,8 +2533,10 @@ function FloatingDictionary:buildPreviewPayload(word, result, result_index, resu
 	local css
 
 	-- Match the popup's typeface to whatever font the currently open book
-	-- is using, instead of a fixed UI font (same approach as xray_ui.lua).
-	local doc_font_family = getDocFontFamily(self)
+	-- is using, instead of a fixed UI font (same approach as xray_ui.lua) —
+	-- unless the user picked an explicit override in the Font tab, which
+	-- always wins.
+	local doc_font_family = self:getFontFamilyOverride() or getDocFontFamily(self)
 	local font_size_delta = self:getFontSizeDelta()
 	-- A+/A- now also scales the footer buttons (icon size, row height, and
 	-- text-fallback font) by the same ratio as the text, so the whole preview
