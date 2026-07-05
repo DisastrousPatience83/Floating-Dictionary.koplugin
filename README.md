@@ -14,7 +14,7 @@ Floating Dictionary adds a lightweight preview step in between: tap a word, get 
 * **Matches your book's typography** — the preview automatically uses the same font family as the book you're currently reading (falls back to your global CRE font setting, or a sane default if neither is available).
 * **Adjustable preview font size** — dedicated **A-** / **A+** buttons let you shrink or grow the preview's text (word, dictionary name, and definition) independently of the book's font size. The setting is remembered across lookups and app restarts. **The footer buttons now scale right along with it** (icon size, row height, and fallback labels), so the whole preview grows and shrinks together instead of the toolbar staying a fixed size.
 * **Multiple dictionary results** — swipe or use the previous/next buttons to cycle through all dictionaries that matched your word, with a `x/y` counter. When there's only one result, the arrows simply gray out instead of disappearing.
-* **Translate button** — send the looked-up word or phrase straight to KOReader's own built-in translator, using whichever source/target languages you already have configured under *Settings > Dictionary/Translation*. No extra plugin or dependency required.
+* **Translate button** — send the looked-up word or phrase straight to KOReader's own built-in translator, using whichever source/target languages you already have configured. No extra plugin or dependency required.
 * **Quick actions from the preview**, configurable from the plugin's menu:
   * Highlight the looked-up word
   * Full-text search in the book
