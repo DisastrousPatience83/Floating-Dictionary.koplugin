@@ -5,6 +5,7 @@ local TopContainer = require("ui/widget/container/topcontainer")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local Font = require("ui/font")
 local IconWidget = require("ui/widget/iconwidget")
+local Menu = require("ui/widget/menu")
 local TextWidget = require("ui/widget/textwidget")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
@@ -58,11 +59,13 @@ local CONTENT_PADDING_LEFT = Screen:scaleBySize(18)
 local CONTENT_PADDING_RIGHT = Screen:scaleBySize(14)
 
 local ICON_SEARCH = "appbar.search"
+local ICON_SETTINGS = "appbar.settings"
 local ICON_PREVIOUS = "chevron.left"
 local ICON_NEXT = "chevron.right"
 
 local SETTING_ENABLED = "floatingdictionary_enabled"
 local SETTING_VISIBLE_ACTIONS = "floatingdictionary_visible_actions"
+local SETTING_ACTIONS_ORDER = "floatingdictionary_actions_order"
 local SETTING_SHOW_EXTERNAL_BUTTONS = "floatingdictionary_show_external_buttons"
 local SETTING_FONT_SIZE_DELTA = "floatingdictionary_font_size_delta"
 
@@ -77,13 +80,25 @@ local ACTION_HIGHLIGHT = "highlight"
 local ACTION_SEARCH_BOOK = "search_book"
 local ACTION_WIKIPEDIA = "wikipedia"
 local ACTION_VOCABULARY = "vocabulary"
+local ACTION_TRANSLATE = "translate"
+local ACTION_NAV_PREV = "nav_prev"
+local ACTION_NAV_NEXT = "nav_next"
+local ACTION_EXTERNAL = "external_plugins"
 
--- Order here is also the order the buttons are drawn in the footer.
+-- Order here is also the default order buttons are drawn in the footer
+-- (the user can reorder and hide them from the gear-icon settings popup).
+-- "kind" marks the few entries that aren't plain toggleable dictionary
+-- actions: the dictionary-navigation arrows and the external-plugins group
+-- each need special handling when the footer is actually built.
 local ACTIONS = {
+	{ id = ACTION_NAV_PREV, label = _("Previous result"), short_label = _("Prev"), kind = "nav_prev" },
 	{ id = ACTION_HIGHLIGHT, label = _("Highlight"), short_label = _("Highlight") },
 	{ id = ACTION_SEARCH_BOOK, label = _("Fulltext search"), short_label = _("Search") },
 	{ id = ACTION_WIKIPEDIA, label = _("Wikipedia"), short_label = _("Wiki") },
 	{ id = ACTION_VOCABULARY, label = _("Add to vocabulary builder"), short_label = _("+Vocab") },
+	{ id = ACTION_TRANSLATE, label = _("Translate"), short_label = _("Translate") },
+	{ id = ACTION_EXTERNAL, label = _("Buttons from other plugins"), short_label = "+", kind = "external" },
+	{ id = ACTION_NAV_NEXT, label = _("Next result"), short_label = _("Next"), kind = "nav_next" },
 }
 
 local ACTION_BY_ID = {}
@@ -91,11 +106,23 @@ for _, action in ipairs(ACTIONS) do
 	ACTION_BY_ID[action.id] = action
 end
 
+-- Text-fallback footer buttons (used when no icon file is available) show
+-- only the capitalized first letter of the label, so they always fit the
+-- narrow button width regardless of translation length (e.g. "Highlight" ->
+-- "H") instead of being clipped mid-word.
+local function getButtonInitial(text)
+	if type(text) ~= "string" or text == "" then
+		return "?"
+	end
+	return text:sub(1, 1):upper()
+end
+
 local PLUGIN_ICON_EXTENSIONS = { ".svg", ".png" }
 local PLUGIN_ICON_CANDIDATES = {
 	[ACTION_HIGHLIGHT] = { "highlight", "floatingdictionary.highlight" },
 	[ACTION_WIKIPEDIA] = { "wikipedia", "floatingdictionary.wikipedia" },
 	[ACTION_VOCABULARY] = { "vocabulary", "floatingdictionary.vocabulary" },
+	[ACTION_TRANSLATE] = { "translate", "floatingdictionary.translate" },
 }
 
 -- Small helpers --------------------------------------------------------------
@@ -503,10 +530,12 @@ local PreviewButton = InputContainer:extend({
 	icon = nil,
 	icon_file = nil,
 	face = nil, -- optional Font face for the text fallback label; defaults to cfont
+	disabled = false, -- greys the icon out and makes the tap a no-op
 	width = nil,
 	height = Screen:scaleBySize(48),
 	icon_width = KOREADER_ICON_SIZE,
 	icon_height = KOREADER_ICON_SIZE,
+	align = "center", -- "center" (default, used for footer icons) or "left" (text rows)
 	callback = nil,
 	show_parent = nil,
 })
@@ -522,6 +551,7 @@ function PreviewButton:init()
 	local inner_w = math.max(1, outer_w - 2 * bordersize - 2 * padding_h)
 	local inner_h = math.max(1, outer_h - 2 * bordersize - 2 * padding_v)
 	local label
+	local is_text_label = not self.icon_file and not self.icon
 
 	if self.icon_file then
 		label = IconWidget:new({
@@ -530,6 +560,9 @@ function PreviewButton:init()
 			height = self.icon_height,
 			alpha = true,
 			is_icon = true,
+			-- Very light gray when there's nothing to do, full black/solid
+			-- once the action becomes available again.
+			dim = self.disabled,
 		})
 	elseif self.icon then
 		label = IconWidget:new({
@@ -537,6 +570,7 @@ function PreviewButton:init()
 			width = self.icon_width,
 			height = self.icon_height,
 			alpha = true,
+			dim = self.disabled,
 		})
 	else
 		label = TextWidget:new({
@@ -544,10 +578,34 @@ function PreviewButton:init()
 			face = self.face or Font:getFace("cfont", UI_FONT_SIZE),
 			bold = true,
 			max_width = inner_w,
+			fgcolor = self.disabled and Blitbuffer.COLOR_LIGHT_GRAY or nil,
 		})
 	end
 
 	self.label_widget = label
+
+	local content
+	if self.align == "left" and is_text_label then
+		-- Pad the label out to the full row width with an invisible span
+		-- instead of centering it, so text (like a row's name/checkbox)
+		-- hugs the left edge while the row itself still reserves the same
+		-- fixed width as any other chip next to it.
+		local label_size = label:getSize()
+		local spacer_width = math.max(0, inner_w - (label_size and label_size.w or 0))
+		content = CenterContainer:new({
+			dimen = Geom:new({ w = inner_w, h = inner_h }),
+			HorizontalGroup:new({
+				label,
+				HorizontalSpan:new({ width = spacer_width }),
+			}),
+		})
+	else
+		content = CenterContainer:new({
+			dimen = Geom:new({ w = inner_w, h = inner_h }),
+			label,
+		})
+	end
+
 	self.frame = FrameContainer:new({
 		show_parent = self.show_parent,
 		bordersize = bordersize,
@@ -556,13 +614,7 @@ function PreviewButton:init()
 		padding_right = padding_h,
 		padding_top = padding_v,
 		padding_bottom = padding_v,
-		CenterContainer:new({
-			dimen = Geom:new({
-				w = inner_w,
-				h = inner_h,
-			}),
-			label,
-		}),
+		content,
 	})
 
 	self.dimen = self.frame:getSize()
@@ -578,6 +630,9 @@ function PreviewButton:init()
 end
 
 function PreviewButton:onTapSelectButton()
+	if self.disabled then
+		return true
+	end
 	if self.callback then
 		self.callback()
 	end
@@ -593,6 +648,9 @@ local FloatingDictionaryPopup = InputContainer:extend({
 	dialog = nil,
 	doc_font_size = Screen:scaleBySize(18),
 	button_face = nil, -- resolved Font face matching the book's typeface, used for text-fallback buttons
+	button_icon_size = nil, -- scaled with A+/A-; falls back to KOREADER_ICON_SIZE
+	button_row_height = nil, -- scaled with A+/A-; falls back to BUTTON_HEIGHT
+	open_button_settings_callback = nil, -- called after closing, from the gear button
 	open_callback = nil,
 	actions = nil, -- ordered list of { spec = {icon|icon_file|text}, callback = function() ... end }
 	prev_callback = nil,
@@ -630,7 +688,7 @@ function FloatingDictionaryPopup:init()
 
 	local content_width = math.max(MIN_CONTENT_WIDTH, self.width - CONTENT_PADDING_LEFT - CONTENT_PADDING_RIGHT)
 	local buttons = self:makeButtons(content_width)
-	local buttons_height = self:getWidgetHeight(buttons, BUTTON_HEIGHT)
+	local buttons_height = self:getWidgetHeight(buttons, self.button_row_height or BUTTON_HEIGHT)
 	local fixed_height = PANEL_PADDING_TOP + TEXT_BUTTON_GAP + buttons_height + PANEL_PADDING_BOTTOM
 		+ 2 * CARD_BORDER_SIZE
 	local max_html_height = max_popup_height - fixed_height
@@ -697,36 +755,20 @@ function FloatingDictionaryPopup:init()
 end
 
 function FloatingDictionaryPopup:makeButtons(width)
-	local button_height = BUTTON_HEIGHT
+	local button_height = self.button_row_height or BUTTON_HEIGHT
+	local icon_size = self.button_icon_size or KOREADER_ICON_SIZE
 	local separator_width = BUTTON_SEPARATOR_WIDTH
 	local button_specs = {}
 
-	-- Only show dictionary navigation when there is more than one useful
-	-- definition result. When a lookup has a single dictionary hit, or no hit at
-	-- all, the footer stays compact.
-	if self.result_count and self.result_count > 1 then
-		table.insert(button_specs, {
-			spec = { icon = ICON_PREVIOUS },
-			callback = function()
-				return self:onPrevDictionary()
-			end,
-		})
-	end
-
+	-- Dictionary-navigation (prev/next) and external-plugin buttons now
+	-- arrive as ordinary entries inside self.actions, in whatever order and
+	-- visibility the user picked from the settings popup, so they aren't
+	-- hardcoded here anymore. Only A-/A+ and the settings gear stay fixed.
 	for index, action in ipairs(self.actions or {}) do
 		table.insert(button_specs, {
 			spec = action.spec or { icon = ICON_SEARCH },
 			callback = function()
 				return self:onActionButton(index)
-			end,
-		})
-	end
-
-	if self.result_count and self.result_count > 1 then
-		table.insert(button_specs, {
-			spec = { icon = ICON_NEXT },
-			callback = function()
-				return self:onNextDictionary()
 			end,
 		})
 	end
@@ -745,6 +787,16 @@ function FloatingDictionaryPopup:makeButtons(width)
 		end,
 	})
 
+	-- Always present, never hidden and never listed in the button-visibility
+	-- menu it opens: this is the control for that menu, not one of the
+	-- toggleable actions.
+	table.insert(button_specs, {
+		spec = { icon = ICON_SETTINGS },
+		callback = function()
+			return self:onShowButtonSettings()
+		end,
+	})
+
 	local button_count = #button_specs
 	local separator_count = math.max(0, button_count - 1)
 	local available_button_width = math.max(1, width - separator_width * separator_count)
@@ -758,10 +810,11 @@ function FloatingDictionaryPopup:makeButtons(width)
 			icon = spec.icon,
 			icon_file = spec.icon_file,
 			face = self.button_face,
+			disabled = spec.disabled,
 			width = button_width + (extra_width or 0),
 			height = button_height,
-			icon_width = KOREADER_ICON_SIZE,
-			icon_height = KOREADER_ICON_SIZE,
+			icon_width = icon_size,
+			icon_height = icon_size,
 			show_parent = self,
 			callback = callback,
 		})
@@ -928,6 +981,14 @@ function FloatingDictionaryPopup:onIncreaseFontSize()
 	return true
 end
 
+function FloatingDictionaryPopup:onShowButtonSettings()
+	UIManager:close(self)
+	if self.open_button_settings_callback then
+		return self.open_button_settings_callback()
+	end
+	return true
+end
+
 function FloatingDictionaryPopup:onTapClose(_arg, ges)
 	if
 		ges
@@ -957,6 +1018,76 @@ function FloatingDictionaryPopup:onSwipeFollow(_arg, ges)
 		return self:onClosePreview()
 	end
 
+	return false
+end
+
+-- Button-settings popup ------------------------------------------------------
+-- A small centered card, built the same way as FloatingDictionaryPopup (white
+-- FrameContainer, whole-screen tap-outside-to-close, Back key to close), but
+-- listing one row per footer button. Each row is itself a HorizontalGroup of
+-- independently tappable chips (reusing PreviewButton): a wide label chip
+-- that toggles visibility, plus a ↑ and/or ↓ chip that reorders the button.
+-- Only the arrow(s) that would actually do something are shown, so the first
+-- button in the list only gets ↓, the last one only gets ↑, and everything
+-- in between gets both.
+
+local FloatingDictionaryButtonSettingsPopup = InputContainer:extend({
+	body = nil, -- prebuilt VerticalGroup of rows (title, dividers, action rows, external toggle)
+	close_callback = nil,
+})
+
+function FloatingDictionaryButtonSettingsPopup:init()
+	local screen_width = Screen:getWidth()
+	local screen_height = Screen:getHeight()
+
+	if Device:isTouchDevice() then
+		local range = Geom:new({ x = 0, y = 0, w = screen_width, h = screen_height })
+		self.ges_events = {
+			TapClose = { GestureRange:new({ ges = "tap", range = range }) },
+		}
+	end
+
+	if Device:hasKeys() then
+		self.key_events = {
+			Close = { { Device.input.group.Back } },
+		}
+	end
+
+	self.card = FrameContainer:new({
+		background = Blitbuffer.COLOR_WHITE,
+		bordersize = CARD_BORDER_SIZE,
+		color = Blitbuffer.COLOR_DARK_GRAY,
+		radius = CARD_RADIUS,
+		padding = Screen:scaleBySize(10),
+		self.body,
+	})
+
+	self[1] = CenterContainer:new({
+		dimen = Geom:new({ w = screen_width, h = screen_height }),
+		self.card,
+	})
+end
+
+function FloatingDictionaryButtonSettingsPopup:onShow()
+	UIManager:setDirty(self, "ui")
+end
+
+function FloatingDictionaryButtonSettingsPopup:onCloseWidget()
+	UIManager:setDirty(nil, "partial")
+end
+
+function FloatingDictionaryButtonSettingsPopup:onClose()
+	UIManager:close(self)
+	if self.close_callback then
+		return self.close_callback()
+	end
+	return true
+end
+
+function FloatingDictionaryButtonSettingsPopup:onTapClose(_arg, ges)
+	if ges and ges.pos and self.card and self.card.dimen and ges.pos:notIntersectWith(self.card.dimen) then
+		return self:onClose()
+	end
 	return false
 end
 
@@ -1045,6 +1176,12 @@ function FloatingDictionary:getVisibleActionsSetting()
 end
 
 function FloatingDictionary:isActionVisible(action_id)
+	if action_id == ACTION_NAV_PREV or action_id == ACTION_NAV_NEXT then
+		return true -- navigation arrows can be reordered but never hidden
+	end
+	if action_id == ACTION_EXTERNAL then
+		return self:isShowExternalButtonsEnabled()
+	end
 	local saved = self:getVisibleActionsSetting()
 	if saved[action_id] == nil then
 		return true -- shown by default
@@ -1053,9 +1190,85 @@ function FloatingDictionary:isActionVisible(action_id)
 end
 
 function FloatingDictionary:setActionVisible(action_id, visible)
+	if action_id == ACTION_NAV_PREV or action_id == ACTION_NAV_NEXT then
+		return -- can't be hidden, only reordered
+	end
+	if action_id == ACTION_EXTERNAL then
+		self:setShowExternalButtonsEnabled(visible)
+		return
+	end
 	local saved = self:getVisibleActionsSetting()
 	saved[action_id] = visible and true or false
 	G_reader_settings:saveSetting(SETTING_VISIBLE_ACTIONS, saved)
+end
+
+-- Persisted footer button order. Falls back to the default ACTIONS order,
+-- and stays in sync with ACTIONS even if it changes between versions: any
+-- id missing from the saved order is appended, and any id no longer in
+-- ACTIONS (e.g. a removed action) is dropped.
+function FloatingDictionary:getActionOrderSetting()
+	local saved = G_reader_settings:readSetting(SETTING_ACTIONS_ORDER)
+	if type(saved) ~= "table" then
+		saved = {}
+	end
+
+	local seen = {}
+	local order = {}
+	for _, action_id in ipairs(saved) do
+		if ACTION_BY_ID[action_id] and not seen[action_id] then
+			seen[action_id] = true
+			table.insert(order, action_id)
+		end
+	end
+
+	for _, action in ipairs(ACTIONS) do
+		if not seen[action.id] then
+			seen[action.id] = true
+			table.insert(order, action.id)
+		end
+	end
+
+	return order
+end
+
+function FloatingDictionary:setActionOrderSetting(order)
+	G_reader_settings:saveSetting(SETTING_ACTIONS_ORDER, order)
+end
+
+-- ACTIONS reordered per the persisted user order (all actions, regardless
+-- of visibility; getVisibleActions filters that afterwards).
+function FloatingDictionary:getOrderedActions()
+	local order = self:getActionOrderSetting()
+	local ordered = {}
+	for _, action_id in ipairs(order) do
+		table.insert(ordered, ACTION_BY_ID[action_id])
+	end
+	return ordered
+end
+
+-- Swaps action_id with its neighbor in the given direction (-1 = up/earlier,
+-- 1 = down/later) and persists the new order. No-op at either end of the list.
+function FloatingDictionary:moveAction(action_id, direction)
+	local order = self:getActionOrderSetting()
+
+	local current_pos
+	for pos, id in ipairs(order) do
+		if id == action_id then
+			current_pos = pos
+			break
+		end
+	end
+	if not current_pos then
+		return
+	end
+
+	local target_pos = current_pos + direction
+	if target_pos < 1 or target_pos > #order then
+		return
+	end
+
+	order[current_pos], order[target_pos] = order[target_pos], order[current_pos]
+	self:setActionOrderSetting(order)
 end
 
 function FloatingDictionary:isShowExternalButtonsEnabled()
@@ -1074,7 +1287,7 @@ end
 -- Ordered list of actions that should currently render as footer buttons.
 function FloatingDictionary:getVisibleActions()
 	local visible = {}
-	for _, action in ipairs(ACTIONS) do
+	for _, action in ipairs(self:getOrderedActions()) do
 		local available = action.id ~= ACTION_VOCABULARY or self:hasVocabBuilder()
 		if available and self:isActionVisible(action.id) then
 			table.insert(visible, action)
@@ -1128,30 +1341,184 @@ function FloatingDictionary:getActionIconSpec(action_id)
 
 	-- Fallback intentionally uses gettext labels from KOReader's catalog.
 	-- This avoids showing an untranslated custom string when the optional
-	-- SVG/PNG is not present in icons/. Uses the shorter label so it still
-	-- fits comfortably next to the other footer buttons.
-	return { text = action.short_label or action.label }
+	-- SVG/PNG is not present in icons/. Reduced to a single capitalized
+	-- initial so it always fits the button instead of being cut off.
+	return { text = getButtonInitial(action.short_label or action.label) }
 end
 
 function FloatingDictionary:genVisibleActionsMenu()
 	local items = {}
 
-	for _, action in ipairs(ACTIONS) do
-		table.insert(items, {
-			text = action.label,
-			enabled_func = function()
-				return action.id ~= ACTION_VOCABULARY or self:hasVocabBuilder()
-			end,
-			checked_func = function()
-				return self:isActionVisible(action.id)
-			end,
-			callback = function()
-				self:setActionVisible(action.id, not self:isActionVisible(action.id))
-			end,
-		})
+	for _, action in ipairs(self:getOrderedActions()) do
+		-- Navigation arrows and the external-plugins group have their own
+		-- dedicated handling (swipe gestures always work regardless of
+		-- footer visibility; the external toggle already has its own menu
+		-- entry above), so only the plain dictionary actions show up here.
+		-- All of them, including these, are still reorderable from the
+		-- gear-icon settings popup shown from the preview itself.
+		if not action.kind then
+			table.insert(items, {
+				text = action.label,
+				enabled_func = function()
+					return action.id ~= ACTION_VOCABULARY or self:hasVocabBuilder()
+				end,
+				checked_func = function()
+					return self:isActionVisible(action.id)
+				end,
+				callback = function()
+					self:setActionVisible(action.id, not self:isActionVisible(action.id))
+				end,
+			})
+		end
 	end
 
 	return items
+end
+
+-- Centered popup opened from the gear button next to the word: one row per
+-- footer button, showing its compact letter, its full name, and an explicit
+-- checkbox (checked = shown, empty = hidden), plus its own ↑/↓ chips to
+-- reorder it. The whole popup is rebuilt after every tap so the checkbox and
+-- arrows immediately reflect the new state. Reuses the same persisted
+-- settings as the plugin submenu (genVisibleActionsMenu).
+function FloatingDictionary:showButtonSettingsMenu(on_close)
+	local CHECKBOX_ON = "☑"
+	local CHECKBOX_OFF = "☐"
+	local ROW_HEIGHT = Screen:scaleBySize(50)
+	local ARROW_WIDTH = Screen:scaleBySize(50)
+	local POPUP_WIDTH = math.floor(Screen:getWidth() * 0.82)
+	local row_face = Font:getFace("cfont", UI_FONT_SIZE)
+	local popup
+
+	local function closePopup()
+		if popup then
+			pcall(function()
+				UIManager:close(popup)
+			end)
+			popup = nil
+		end
+	end
+
+	local function makeChip(text, width, callback, align)
+		return PreviewButton:new({
+			text = text,
+			face = row_face,
+			width = width,
+			height = ROW_HEIGHT,
+			align = align or "center",
+			callback = callback,
+		})
+	end
+
+	local function makeIconChip(icon, width, callback)
+		return PreviewButton:new({
+			icon = icon,
+			width = width,
+			height = ROW_HEIGHT,
+			icon_width = KOREADER_ICON_SIZE,
+			icon_height = KOREADER_ICON_SIZE,
+			callback = callback,
+		})
+	end
+
+	local function makeSeparatorLine()
+		return LineWidget:new({
+			background = Blitbuffer.COLOR_LIGHT_GRAY,
+			dimen = Geom:new({ w = POPUP_WIDTH, h = BUTTON_SEPARATOR_WIDTH }),
+		})
+	end
+
+	local rebuild -- forward declaration, referenced by row callbacks below
+
+	local function buildRows()
+		local rows = {}
+
+		table.insert(rows, HorizontalGroup:new({
+			makeChip(_("Floating Dictionary buttons"), POPUP_WIDTH - ARROW_WIDTH, nil, "left"),
+			makeChip("✕", ARROW_WIDTH, function()
+				popup:onClose()
+			end),
+		}))
+		table.insert(rows, makeSeparatorLine())
+
+		local ordered_actions = self:getOrderedActions()
+		local visible_ids = {}
+		for _, action in ipairs(ordered_actions) do
+			if action.id ~= ACTION_VOCABULARY or self:hasVocabBuilder() then
+				table.insert(visible_ids, action.id)
+			end
+		end
+
+		for list_pos, action_id in ipairs(visible_ids) do
+			local action = ACTION_BY_ID[action_id]
+			local initial = getButtonInitial(action.short_label or action.label)
+			local is_navigation = action.id == ACTION_NAV_PREV or action.id == ACTION_NAV_NEXT
+			local is_first = list_pos == 1
+			local is_last = list_pos == #visible_ids
+			local arrow_count = (is_first and 0 or 1) + (is_last and 0 or 1)
+
+			local row_widgets = {}
+
+			if is_navigation then
+				-- Show the actual chevron icon used in the footer (not just
+				-- its name), so it's obvious at a glance which button this
+				-- row refers to. Navigation arrows can be reordered but
+				-- never hidden, so there's no checkbox and no tap-to-toggle.
+				local nav_icon = action.id == ACTION_NAV_PREV and ICON_PREVIOUS or ICON_NEXT
+				table.insert(row_widgets, makeIconChip(nav_icon, ARROW_WIDTH, nil))
+				table.insert(row_widgets, makeChip(
+					action.label,
+					POPUP_WIDTH - ARROW_WIDTH - arrow_count * ARROW_WIDTH,
+					nil,
+					"left"
+				))
+			else
+				local checkbox = self:isActionVisible(action.id) and CHECKBOX_ON or CHECKBOX_OFF
+				table.insert(row_widgets, makeChip(
+					string.format("%s  %s  %s", checkbox, initial, action.label),
+					POPUP_WIDTH - arrow_count * ARROW_WIDTH,
+					function()
+						self:setActionVisible(action.id, not self:isActionVisible(action.id))
+						rebuild()
+					end,
+					"left"
+				))
+			end
+
+			-- ↑ and ↓ are two separate tappable chips (not one shared zone),
+			-- so either can be pressed on its own, and they always sit at
+			-- the right edge of the row. Whichever direction has nowhere
+			-- left to go is simply left out.
+			if not is_first then
+				table.insert(row_widgets, makeChip("↑", ARROW_WIDTH, function()
+					self:moveAction(action.id, -1)
+					rebuild()
+				end))
+			end
+			if not is_last then
+				table.insert(row_widgets, makeChip("↓", ARROW_WIDTH, function()
+					self:moveAction(action.id, 1)
+					rebuild()
+				end))
+			end
+
+			table.insert(rows, HorizontalGroup:new(row_widgets))
+			table.insert(rows, makeSeparatorLine())
+		end
+
+		return rows
+	end
+
+	rebuild = function()
+		closePopup()
+		popup = FloatingDictionaryButtonSettingsPopup:new({
+			body = VerticalGroup:new(buildRows()),
+			close_callback = on_close,
+		})
+		UIManager:show(popup)
+	end
+
+	rebuild()
 end
 
 function FloatingDictionary:destroy()
@@ -1574,6 +1941,36 @@ function FloatingDictionary:lookupWikipedia(dict_self, search_text)
 	return self:notify(_("No selection to look up."))
 end
 
+-- Translates the looked-up word/phrase using KOReader's own built-in
+-- translator (frontend/ui/translator.lua). This is a core module present in
+-- every KOReader install -- not a separate plugin file -- so there is
+-- nothing extra to import: it already knows the user's configured source/
+-- target languages (Settings > Dictionary/Translation > Translate settings,
+-- the same menu the stock "Translate" button in the original dictionary
+-- popup uses), and shows its results in KOReader's own translation viewer
+-- popup layered on top of this one.
+function FloatingDictionary:translateText(search_text)
+	search_text = trim(search_text)
+	if search_text == "" then
+		return self:notify(_("No text to translate."))
+	end
+
+	local ok, err = pcall(function()
+		local Translator = require("ui/translator")
+		-- (text, detailed_view, source_lang, target_lang, from_highlight, index)
+		-- Leaving source/target nil makes it fall back to the user's saved
+		-- translator_from_language / translator_to_language settings.
+		Translator:showTranslation(search_text, true, nil, nil, false)
+	end)
+
+	if not ok then
+		logger.warn("FloatingDictionary: translate action failed:", err)
+		return self:notify(_("Could not translate this word."))
+	end
+
+	return true
+end
+
 -- Adds the current word to the Vocabulary Builder plugin, using the same
 -- "WordLookedUp" event that plugins/vocabbuilder.koplugin's own dictionary
 -- button fires. This only runs when that plugin is actually enabled.
@@ -1710,6 +2107,11 @@ function FloatingDictionary:runAction(action_id, dict_self, search_text, dict_cl
 		-- Keep the selection/highlight state around: unlike Highlight/Search,
 		-- adding to the vocabulary builder doesn't consume the selection.
 		return result
+	elseif action_id == ACTION_TRANSLATE then
+		-- Keep the selection/highlight state around, same reasoning as
+		-- ACTION_VOCABULARY: translating doesn't consume the selection, and
+		-- the translation viewer is a separate popup layered on top.
+		return self:translateText(search_text)
 	end
 
 	-- Default: fulltext search in the book.
@@ -1735,7 +2137,14 @@ function FloatingDictionary:buildPreviewPayload(word, result, result_index, resu
 	-- Match the popup's typeface to whatever font the currently open book
 	-- is using, instead of a fixed UI font (same approach as xray_ui.lua).
 	local doc_font_family = getDocFontFamily(self)
-	local button_face = getDocFontFace(self, UI_FONT_SIZE)
+	local font_size_delta = self:getFontSizeDelta()
+	-- A+/A- now also scales the footer buttons (icon size, row height, and
+	-- text-fallback font) by the same ratio as the text, so the whole preview
+	-- grows/shrinks together instead of the buttons staying a fixed size.
+	local button_scale = (UI_FONT_SIZE + font_size_delta) / UI_FONT_SIZE
+	local button_face = getDocFontFace(self, UI_FONT_SIZE + font_size_delta)
+	local button_icon_size = Screen:scaleBySize(24 * button_scale)
+	local button_row_height = Screen:scaleBySize(46 * button_scale)
 
 	if result.no_result then
 		dict_name = _("Dictionary")
@@ -1767,6 +2176,8 @@ function FloatingDictionary:buildPreviewPayload(word, result, result_index, resu
 		css = css,
 		html_resource_directory = result.dictionary_resource_directory,
 		button_face = button_face,
+		button_icon_size = button_icon_size,
+		button_row_height = button_row_height,
 	}
 end
 
@@ -1927,25 +2338,48 @@ function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, d
 		local preview_payload = self:buildPreviewPayload(word, result, current_index, preview_count)
 
 		local action_specs = {}
+		local external_specs
 		for _, action in ipairs(self:getVisibleActions()) do
-			table.insert(action_specs, {
-				spec = self:getActionIconSpec(action.id),
-				callback = function()
-					return self:runAction(action.id, dict_self, search_text, dict_close_callback)
-				end,
-			})
-		end
-
-		for _, extern_spec in ipairs(self:discoverExternalButtons(dict_self, word, result, current_index, results, boxes, link)) do
-			table.insert(action_specs, {
-				spec = { text = extern_spec.text or "?" },
-				callback = function()
-					local ok, err = pcall(extern_spec.callback)
-					if not ok then
-						logger.warn("FloatingDictionary: external dict button failed:", err)
-					end
-				end,
-			})
+			if action.kind == "nav_prev" then
+				table.insert(action_specs, {
+					spec = { icon = ICON_PREVIOUS, disabled = preview_count <= 1 },
+					callback = function()
+						if preview_count > 1 then
+							return showResult(current_index - 1)
+						end
+					end,
+				})
+			elseif action.kind == "nav_next" then
+				table.insert(action_specs, {
+					spec = { icon = ICON_NEXT, disabled = preview_count <= 1 },
+					callback = function()
+						if preview_count > 1 then
+							return showResult(current_index + 1)
+						end
+					end,
+				})
+			elseif action.kind == "external" then
+				external_specs = external_specs
+					or self:discoverExternalButtons(dict_self, word, result, current_index, results, boxes, link)
+				for _, extern_spec in ipairs(external_specs) do
+					table.insert(action_specs, {
+						spec = { text = getButtonInitial(extern_spec.text) },
+						callback = function()
+							local ok, err = pcall(extern_spec.callback)
+							if not ok then
+								logger.warn("FloatingDictionary: external dict button failed:", err)
+							end
+						end,
+					})
+				end
+			else
+				table.insert(action_specs, {
+					spec = self:getActionIconSpec(action.id),
+					callback = function()
+						return self:runAction(action.id, dict_self, search_text, dict_close_callback)
+					end,
+				})
+			end
 		end
 
 		closeCurrentPopup()
@@ -1955,6 +2389,8 @@ function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, d
 			css = preview_payload.css,
 			html_resource_directory = preview_payload.html_resource_directory,
 			button_face = preview_payload.button_face,
+			button_icon_size = preview_payload.button_icon_size,
+			button_row_height = preview_payload.button_row_height,
 			doc_font_size = self:getInterfaceFontSize(),
 			dialog = dict_self and dict_self.dialog,
 			result_count = preview_count,
@@ -1976,6 +2412,11 @@ function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, d
 			increase_font_callback = function()
 				self:setFontSizeDelta(self:getFontSizeDelta() + FONT_SIZE_STEP)
 				return showResult(current_index)
+			end,
+			open_button_settings_callback = function()
+				return self:showButtonSettingsMenu(function()
+					return showResult(current_index)
+				end)
 			end,
 			close_preview_callback = closePreview,
 		})
