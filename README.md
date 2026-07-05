@@ -12,16 +12,22 @@ Floating Dictionary adds a lightweight preview step in between: tap a word, get 
 
 * **Compact floating preview** — shows the looked-up word, the source dictionary, and the definition in a small card instead of the full-screen popup.
 * **Matches your book's typography** — the preview automatically uses the same font family as the book you're currently reading (falls back to your global CRE font setting, or a sane default if neither is available).
-* **Adjustable preview font size** — dedicated **A-** / **A+** buttons let you shrink or grow the preview's text (word, dictionary name, and definition) independently of the book's font size. The setting is remembered across lookups and app restarts. Footer buttons keep a fixed size so the toolbar stays consistent.
-* **Multiple dictionary results** — swipe or use the previous/next buttons to cycle through all dictionaries that matched your word, with a `x/y` counter.
+* **Adjustable preview font size** — dedicated **A-** / **A+** buttons let you shrink or grow the preview's text (word, dictionary name, and definition) independently of the book's font size. The setting is remembered across lookups and app restarts. **The footer buttons now scale right along with it** (icon size, row height, and fallback labels), so the whole preview grows and shrinks together instead of the toolbar staying a fixed size.
+* **Multiple dictionary results** — swipe or use the previous/next buttons to cycle through all dictionaries that matched your word, with a `x/y` counter. When there's only one result, the arrows simply gray out instead of disappearing.
+* **Translate button** — send the looked-up word or phrase straight to KOReader's own built-in translator, using whichever source/target languages you already have configured under *Settings > Dictionary/Translation*. No extra plugin or dependency required.
 * **Quick actions from the preview**, configurable from the plugin's menu:
-
   * Highlight the looked-up word
   * Full-text search in the book
   * Look it up on Wikipedia
+  * Translate it
   * Add it to Vocabulary Builder (only shown if that plugin is installed)
 * **External dictionary button passthrough** — if other plugins register their own buttons on the native dictionary popup, Floating Dictionary discovers and surfaces them in its own footer too, so you don't lose functionality by using the compact preview.
-* **Per-action visibility settings** — turn any of the quick actions on/off from the plugin submenu, and toggle whether external buttons are shown at all.
+* **Fully customizable, reorderable footer** — a gear icon on the preview opens a settings popup listing every footer button (including the navigation arrows and the external-plugins group). From there you can:
+  * Show or hide any action with a tap (arrows stay reorderable but can't be hidden, since they're always functionally needed)
+  * Move any button up or down with dedicated ↑ / ↓ chips — only the arrows that would actually do something are shown, so the first button only gets ↓ and the last only gets ↑
+  * See changes reflected instantly, with no need to close and reopen the popup
+* **Per-action visibility settings** — the same show/hide state is also available from the plugin submenu, and you can toggle whether external buttons are shown at all. Settings persist across restarts and automatically stay in sync with future plugin updates — if an action is removed or a new one is added, your saved order adapts without breaking.
+* **Cleaner compact labels** — on devices or themes without the icon set, footer buttons now fall back to a single capital letter instead of a shortened word, so labels never get clipped regardless of translation length.
 
 ## Installation
 
@@ -34,17 +40,15 @@ Floating Dictionary adds a lightweight preview step in between: tap a word, get 
 1. Select or tap a word in a book like you normally would to trigger a dictionary lookup.
 2. Instead of the full popup, a small card appears near your selection with the word, its source dictionary, and the definition.
 3. From the footer of that card you can:
-
    * Move between multiple dictionary results (if more than one dictionary matched)
-   * Trigger any enabled quick action (highlight, search, Wikipedia, vocabulary)
-   * Shrink/grow the preview text with **A-** / **A+**
+   * Trigger any enabled quick action (highlight, search, Wikipedia, translate, vocabulary)
+   * Shrink/grow the preview text with **A-** / **A+** (the footer buttons scale along with it)
+   * Tap the gear icon to show/hide or reorder any footer button, including the navigation arrows and external-plugin buttons
 4. Tap outside the card, or swipe, to dismiss it.
-
-
 
 ## Compatibility
 
 * Requires KOReader (tested against recent stable builds; no external dependencies beyond what ships with KOReader).
 * Designed to work alongside other dictionary-related plugins — it reads from the same dictionary results KOReader already produces and doesn't replace your installed dictionaries.
 * Vocabulary Builder integration is optional and only activates if that plugin is present.
-
+* Translate action uses KOReader's core translator module (`ui/translator`), which ships with every install — no extra setup needed beyond your existing translation language settings.
