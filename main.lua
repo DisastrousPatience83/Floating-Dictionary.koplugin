@@ -30,6 +30,212 @@ local _ = require("gettext")
 
 local Screen = Device.screen
 
+-- =============================================================================
+-- Embedded page-turn "wipe" animation (adapted from the standalone
+-- `2-Page-turn-animation.lua` patch), self-contained so this plugin does not
+-- depend on that patch being installed separately.
+--
+-- Only the minimum needed is monkey-patched onto Screen/UIManager, and only
+-- once (idempotent guard below), so re-loading this plugin is safe. The
+-- actual animation is only ever triggered when *this* plugin explicitly
+-- arms it (via FloatingDictAnim.animateShow/animateClose helpers below),
+-- so it never fires for unrelated page turns or other UI.
+-- =============================================================================
+local FloatingDictAnim = {}
+
+if not UIManager._floatingdictionary_repaint_patched then
+	UIManager._floatingdictionary_repaint_patched = true
+
+	local userpatch = require("userpatch")
+	local dbg = require("dbg")
+
+	-- Framebuffer snapshot + explicit swipe-state setters, same as the patch.
+	if not Screen.beforePaint then
+		Screen.beforePaint = function(self)
+			if not self.painting then
+				self.painting = true
+				if self.swipe_animations then
+					if self.saved_bb then self.saved_bb:free() end
+					self.saved_bb = self.bb:copy()
+				end
+			end
+		end
+	end
+
+	if not Screen.afterPaint then
+		Screen.afterPaint = function(self)
+			self.painting = false
+		end
+	end
+
+	if not Screen.setSwipeAnimations then
+		Screen.setSwipeAnimations = function(self, enabled)
+			self.swipe_animations = enabled
+		end
+	end
+
+	if not Screen.setSwipeDirection then
+		Screen.setSwipeDirection = function(self, direction)
+			self.swipe_forward = direction
+		end
+	end
+
+	local orig_repaint = UIManager._repaint
+	local refresh_methods = userpatch.getUpValue(orig_repaint, "refresh_methods")
+	local update_dither = userpatch.getUpValue(orig_repaint, "update_dither")
+
+	local FLOATINGDICT_ANIM_STEPS = 10
+
+	UIManager._repaint = function(self)
+		local dirty = false
+		local dithered = false
+
+		local start_idx = 1
+		for i = #self._window_stack, 1, -1 do
+			if self._window_stack[i].widget.covers_fullscreen then
+				start_idx = i
+				break
+			end
+		end
+
+		for i = start_idx, #self._window_stack do
+			local window = self._window_stack[i]
+			local widget = window.widget
+			if dirty or self._dirty[widget] then
+				Screen:beforePaint()
+				widget:paintTo(Screen.bb, window.x, window.y, self._dirty[widget])
+				self._dirty[widget] = nil
+				dirty = true
+				if widget.dithered then
+					dithered = true
+				end
+			end
+		end
+
+		for _, refreshfunc in ipairs(self._refresh_func_stack) do
+			local refreshtype, region, dither = refreshfunc()
+			dither = update_dither(dither, dithered)
+			if refreshtype then
+				self:_refresh(refreshtype, region, dither)
+			end
+		end
+		self._refresh_func_stack = {}
+
+		if dirty and not self._refresh_stack[1] then
+			logger.dbg("no refresh got enqueued. Will do a partial full screen refresh, which might be inefficient")
+			self:_refresh("partial")
+		end
+
+		-- === software swipe animation (armed only by FloatingDictAnim) ===
+		local software_animate = false
+		if Screen.swipe_animations then
+			local is_mtk = Screen.device and Screen.device.isMTK and Screen.device:isMTK()
+			if not is_mtk then
+				software_animate = true
+			end
+		end
+
+		if software_animate then
+			Screen.swipe_animations = false
+			local saved_bb = Screen.saved_bb
+			Screen.saved_bb = nil
+			if saved_bb then
+				local new_bb = Screen.bb:copy()
+				local steps = FLOATINGDICT_ANIM_STEPS
+				local screen_w = Screen.bb:getWidth()
+				local screen_h = Screen.bb:getHeight()
+				local swipe_forward = Screen.swipe_forward
+				local prev_dx = 0
+
+				for i = 1, steps do
+					local progress = i / steps
+					local dx = math.floor(screen_w * progress)
+					local strip_w = dx - prev_dx
+
+					if swipe_forward then
+						Screen.bb:blitFrom(saved_bb, 0, 0, 0, 0, screen_w - dx, screen_h)
+						Screen.bb:blitFrom(new_bb, screen_w - dx, 0, screen_w - dx, 0, dx, screen_h)
+
+						if i < steps then
+							if strip_w > 0 then
+								Screen:refreshUI(screen_w - dx, 0, strip_w, screen_h)
+								self:yieldToEPDC(40000)
+							end
+						else
+							Screen:refreshUI(0, 0, screen_w, screen_h)
+						end
+					else
+						Screen.bb:blitFrom(new_bb, 0, 0, 0, 0, dx, screen_h)
+						Screen.bb:blitFrom(saved_bb, dx, 0, dx, 0, screen_w - dx, screen_h)
+
+						if i < steps then
+							if strip_w > 0 then
+								Screen:refreshUI(prev_dx, 0, strip_w, screen_h)
+								self:yieldToEPDC(40000)
+							end
+						else
+							Screen:refreshUI(0, 0, screen_w, screen_h)
+						end
+					end
+
+					prev_dx = dx
+				end
+
+				local kept_refreshes = {}
+				for _, refresh in ipairs(self._refresh_stack) do
+					if refresh.mode == "full" then
+						table.insert(kept_refreshes, refresh)
+					end
+				end
+				self._refresh_stack = kept_refreshes
+
+				new_bb:free()
+				saved_bb:free()
+			end
+		end
+		-- === end software swipe animation ===
+
+		for _, refresh in ipairs(self._refresh_stack) do
+			refresh.dither = update_dither(refresh.dither, dithered)
+			if not Screen.hw_dithering then
+				refresh.dither = nil
+			end
+			dbg:v("triggering refresh", refresh)
+			refresh_methods[refresh.mode](Screen,
+				refresh.region.x, refresh.region.y,
+				refresh.region.w, refresh.region.h,
+				refresh.dither)
+		end
+
+		if dirty then
+			Screen:afterPaint()
+		end
+
+		self._refresh_stack = {}
+		self.refresh_counted = false
+	end
+end
+
+-- Arms the wipe animation (direction = true for left-to-right, false for
+-- right-to-left) and shows the widget. Falls back to a plain UIManager:show
+-- if the device can't do the software animation.
+function FloatingDictAnim.animateShow(widget, forward)
+	if Device.canDoSwipeAnimation and Device:canDoSwipeAnimation() and Screen.setSwipeAnimations then
+		Screen:setSwipeDirection(forward)
+		Screen:setSwipeAnimations(true)
+	end
+	UIManager:show(widget)
+end
+
+-- Arms the wipe animation and closes the widget.
+function FloatingDictAnim.animateClose(widget, forward)
+	if Device.canDoSwipeAnimation and Device:canDoSwipeAnimation() and Screen.setSwipeAnimations then
+		Screen:setSwipeDirection(forward)
+		Screen:setSwipeAnimations(true)
+	end
+	UIManager:close(widget)
+end
+
 local FloatingDictionary = WidgetContainer:extend({
 	name = "floatingdictionary",
 	is_doc_only = true,
@@ -44,7 +250,7 @@ local PANEL_MAX_HEIGHT_RATIO = 0.38
 local MIN_CONTENT_WIDTH = Screen:scaleBySize(120)
 
 local KOREADER_ICON_SIZE = Screen:scaleBySize(24)
-local BUTTON_HEIGHT = Screen:scaleBySize(46)
+local BUTTON_HEIGHT = Screen:scaleBySize(32)
 local BUTTON_SEPARATOR_WIDTH = math.max(1, Screen:scaleBySize(1))
 
 -- Card look: the panel floats slightly above the bottom edge and is inset
@@ -60,6 +266,21 @@ local TEXT_BUTTON_GAP = Screen:scaleBySize(6)
 local CONTENT_PADDING_LEFT = Screen:scaleBySize(18)
 local CONTENT_PADDING_RIGHT = Screen:scaleBySize(14)
 
+-- Cascade breadcrumb: a thin strip glued to the top of the card, above the
+-- word/definition area, showing the trail of lookups that led to the one
+-- currently shown (e.g. "... -> Patas -> Pelo -> ADN -> Vivo -> Hidrocarburo").
+local BREADCRUMB_FONT_SIZE = 15
+local BREADCRUMB_GAP = Screen:scaleBySize(4) -- space between breadcrumb strip and separator below it
+local BREADCRUMB_BOTTOM_MARGIN = Screen:scaleBySize(4)
+local BREADCRUMB_ARROW_TEXT = " \xE2\x86\x92 " -- " -> " (U+2192 RIGHTWARDS ARROW)
+local BREADCRUMB_ELLIPSIS_TEXT = "..."
+-- Hard cap on how many cards a cascade session keeps stacked at once. Once a
+-- new lookup would exceed this, the oldest (bottom of the stack) card is
+-- dropped to make room, sliding the window forward -- this is what keeps an
+-- overeager chain of cross-references ("word -> word -> word -> ...") from
+-- growing without bound. The breadcrumb's leading "..." communicates that
+-- older steps exist even when they're no longer literally in the stack.
+local CASCADE_MAX_DEPTH = 4
 local ICON_SEARCH = "appbar.search"
 local ICON_SETTINGS = "appbar.settings"
 local ICON_PREVIOUS = "chevron.left"
@@ -70,6 +291,11 @@ local SETTING_VISIBLE_ACTIONS = "floatingdictionary_visible_actions"
 local SETTING_ACTIONS_ORDER = "floatingdictionary_actions_order"
 local SETTING_SHOW_EXTERNAL_BUTTONS = "floatingdictionary_show_external_buttons"
 local SETTING_FONT_SIZE_DELTA = "floatingdictionary_font_size_delta"
+-- Whether tapping a cross-reference link inside a definition (which KOReader
+-- re-routes through ReaderDictionary:showDict, same as any other lookup) opens
+-- as a "cascade": stacked on top of the previous lookup with a breadcrumb
+-- trail, instead of just replacing it like a plain new search would.
+local SETTING_CASCADE_ENABLED = "floatingdictionary_cascade_enabled"
 -- Name (not path) of a font face the user picked from the settings menu to
 -- always use in the preview, overriding the book/global-CRE font detection
 -- done by getDocFontFamily(). nil/unset means "use the book's font" (default).
@@ -90,6 +316,8 @@ local ACTION_TRANSLATE = "translate"
 local ACTION_NAV_PREV = "nav_prev"
 local ACTION_NAV_NEXT = "nav_next"
 local ACTION_EXTERNAL = "external_plugins"
+local ACTION_FONT_DECREASE = "font_decrease"
+local ACTION_FONT_INCREASE = "font_increase"
 
 -- Order here is also the default order buttons are drawn in the footer
 -- (the user can reorder and hide them from the gear-icon settings popup).
@@ -104,6 +332,8 @@ local ACTIONS = {
 	{ id = ACTION_VOCABULARY, label = _("Add to vocabulary builder"), short_label = _("+Vocab") },
 	{ id = ACTION_TRANSLATE, label = _("Translate"), short_label = _("Translate") },
 	{ id = ACTION_EXTERNAL, label = _("Buttons from other plugins"), short_label = "+", kind = "external" },
+	{ id = ACTION_FONT_DECREASE, label = _("Decrease font size"), short_label = "A-", kind = "font_decrease" },
+	{ id = ACTION_FONT_INCREASE, label = _("Increase font size"), short_label = "A+", kind = "font_increase" },
 	{ id = ACTION_NAV_NEXT, label = _("Next result"), short_label = _("Next"), kind = "nav_next" },
 }
 
@@ -541,66 +771,6 @@ end
 
 -- Height estimation ----------------------------------------------------------
 
-local function stripHtmlForLineEstimate(html)
-	html = tostring(html or "")
-	html = html:gsub("<%s*[bB][rR]%s*/?%s*>", "\n")
-	html = html:gsub("</%s*[pP]%s*>", "\n")
-	html = html:gsub("</%s*[dD][iI][vV]%s*>", "\n")
-	html = html:gsub("</%s*[lL][iI]%s*>", "\n")
-	html = html:gsub("</%s*[uU][lL]%s*>", "\n")
-	html = html:gsub("</%s*[oO][lL]%s*>", "\n")
-	html = html:gsub("</%s*[hH][1-6]%s*>", "\n")
-	html = html:gsub("<[^>]+>", "")
-	html = html:gsub("&nbsp;", " ")
-	html = html:gsub("&amp;", "&")
-	html = html:gsub("&lt;", "<")
-	html = html:gsub("&gt;", ">")
-	html = html:gsub("&quot;", '"')
-	return html
-end
-
-local function estimateHtmlLineCount(html, content_width, font_size)
-	local text = stripHtmlForLineEstimate(html)
-	local average_char_width = math.max(1, font_size * 0.50)
-	local chars_per_line = math.max(12, math.floor(content_width / average_char_width))
-	local lines = 0
-
-	text = text:gsub("\r\n", "\n"):gsub("\r", "\n") .. "\n"
-
-	for raw_line in text:gmatch("(.-)\n") do
-		local line = trim(raw_line)
-		if line ~= "" then
-			lines = lines + math.max(1, math.ceil(#line / chars_per_line))
-		end
-	end
-
-	return math.max(1, lines)
-end
-
-local function getHtmlHeightProfile(html, content_width, font_size, max_html_height)
-	local estimated_lines = estimateHtmlLineCount(html, content_width, font_size)
-	local line_height = math.ceil(font_size * 1.30)
-	local safety_lines = estimated_lines <= 2 and 0.08 or estimated_lines <= 3 and 0.18 or 0.35
-	local estimated_height = math.ceil((estimated_lines + safety_lines) * line_height + Screen:scaleBySize(1))
-	local base_height = math.max(Screen:scaleBySize(22), math.ceil(font_size * 1.10))
-	local min_height = math.max(base_height, estimated_height)
-
-	if max_html_height and max_html_height > 0 then
-		min_height = math.min(max_html_height, min_height)
-	end
-
-	local compact_cap
-	if estimated_lines <= 3 then
-		compact_cap = math.ceil((estimated_lines + 0.35) * line_height + Screen:scaleBySize(4))
-	end
-
-	return {
-		estimated_lines = estimated_lines,
-		min_height = min_height,
-		compact_cap = compact_cap,
-	}
-end
-
 -- Button helpers -------------------------------------------------------------
 -- ButtonTable only supports icons from KOReader's global icon search path.
 -- This small button keeps the same visual structure but can also render an
@@ -721,6 +891,43 @@ function PreviewButton:onTapSelectButton()
 	return true
 end
 
+-- Breadcrumb word: a bare tappable label (no border/background/padding),
+-- used for each clickable step of the cascade breadcrumb trail. The last
+-- word in the trail is rendered bold and passed no callback (it's the
+-- current lookup, not a place to go "back" to).
+local BreadcrumbWord = InputContainer:extend({
+	text = nil,
+	face = nil,
+	bold = false,
+	callback = nil,
+})
+
+function BreadcrumbWord:init()
+	local label = TextWidget:new({
+		text = self.text or "",
+		face = self.face,
+		bold = self.bold,
+	})
+	self.label_widget = label
+	self.dimen = label:getSize()
+	self[1] = label
+
+	if self.callback then
+		self.ges_events = {
+			TapBreadcrumbWord = {
+				GestureRange:new({ ges = "tap", range = self.dimen }),
+			},
+		}
+	end
+end
+
+function BreadcrumbWord:onTapBreadcrumbWord()
+	if self.callback then
+		self.callback()
+	end
+	return true
+end
+
 -- Preview popup --------------------------------------------------------------
 
 local FloatingDictionaryPopup = InputContainer:extend({
@@ -741,23 +948,35 @@ local FloatingDictionaryPopup = InputContainer:extend({
 	result_count = 1,
 	anchor_top = false, -- true when the selection sits low on screen and the
 	                    -- panel would otherwise cover it; anchors to the top instead.
+	breadcrumb_labels = nil, -- ordered list of strings for the cascade trail; nil/short = hidden
+	breadcrumb_callback = nil, -- function(index) called when a non-last breadcrumb word is tapped
+	lookup_word_callback = nil, -- function(text) called when the user holds/selects a word in the definition body
 })
 
 function FloatingDictionaryPopup:init()
 	local screen_width = Screen:getWidth()
 	local screen_height = Screen:getHeight()
 
+	-- All cascade cards now share the exact same position and size (no
+	-- per-depth inset/peek-behind effect); a new card fully replaces the
+	-- previous one visually instead of nesting inside it.
+	local side_margin = CARD_OUTER_SIDE_MARGIN
+	local edge_margin = CARD_OUTER_BOTTOM_MARGIN
+
 	-- Inset the card from the screen edges so the rounded corners read as a
 	-- floating card rather than a full-bleed bar.
-	self.width = screen_width - 2 * CARD_OUTER_SIDE_MARGIN
+	self.width = screen_width - 2 * side_margin
 
-	local max_popup_height = math.floor(screen_height * PANEL_MAX_HEIGHT_RATIO) - CARD_OUTER_BOTTOM_MARGIN
+	local max_popup_height = math.floor(screen_height * PANEL_MAX_HEIGHT_RATIO) - edge_margin
 
 	if Device:isTouchDevice() then
 		local range = Geom:new({ x = 0, y = 0, w = screen_width, h = screen_height })
 		self.ges_events = {
 			TapClose = { GestureRange:new({ ges = "tap", range = range }) },
 			SwipeFollow = { GestureRange:new({ ges = "swipe", range = range }) },
+			HoldStartText = { GestureRange:new({ ges = "hold", range = range }) },
+			HoldPanText = { GestureRange:new({ ges = "hold_pan", range = range }) },
+			HoldReleaseText = { GestureRange:new({ ges = "hold_release", range = range }) },
 		}
 	end
 
@@ -771,19 +990,58 @@ function FloatingDictionaryPopup:init()
 	local content_width = math.max(MIN_CONTENT_WIDTH, self.width - CONTENT_PADDING_LEFT - CONTENT_PADDING_RIGHT)
 	local buttons = self:makeButtons(content_width)
 	local buttons_height = self:getWidgetHeight(buttons, self.button_row_height or BUTTON_HEIGHT)
-	local fixed_height = PANEL_PADDING_TOP + TEXT_BUTTON_GAP + buttons_height + PANEL_PADDING_BOTTOM
-		+ 2 * CARD_BORDER_SIZE
-	local max_html_height = max_popup_height - fixed_height
-	local height_profile = getHtmlHeightProfile(self.html_body, content_width, self.doc_font_size, max_html_height)
 
-	if max_html_height < height_profile.min_height then
-		max_html_height = height_profile.min_height
+	-- Breadcrumb strip: only built (and only takes up space) when there's an
+	-- actual cascade trail (2+ steps) to show. Sits glued to the top of the
+	-- card, above the word/definition area, with its own thin separator line.
+	local breadcrumb = self:makeBreadcrumb(content_width)
+	local breadcrumb_rows = {}
+	local breadcrumb_extra_height = 0
+	if breadcrumb then
+		local breadcrumb_height = self:getWidgetHeight(breadcrumb, Screen:scaleBySize(BREADCRUMB_FONT_SIZE + 6))
+		table.insert(breadcrumb_rows, HorizontalGroup:new({
+			HorizontalSpan:new({ width = CONTENT_PADDING_LEFT }),
+			breadcrumb,
+			HorizontalSpan:new({ width = CONTENT_PADDING_RIGHT }),
+		}))
+		table.insert(breadcrumb_rows, VerticalSpan:new({ width = BREADCRUMB_GAP }))
+		table.insert(breadcrumb_rows, LineWidget:new({
+			background = Blitbuffer.COLOR_LIGHT_GRAY,
+			dimen = Geom:new({ w = self.width, h = BUTTON_SEPARATOR_WIDTH }),
+		}))
+		table.insert(breadcrumb_rows, VerticalSpan:new({ width = BREADCRUMB_BOTTOM_MARGIN }))
+		breadcrumb_extra_height = breadcrumb_height + BREADCRUMB_GAP + BUTTON_SEPARATOR_WIDTH + BREADCRUMB_BOTTOM_MARGIN
 	end
 
-	local htmlwidget, htmlwidget_height =
-		self:makeSizedHtmlWidget(content_width, max_html_height, height_profile)
-	self.htmlwidget = htmlwidget
-	self.height = fixed_height + htmlwidget_height
+	local fixed_height = PANEL_PADDING_TOP + breadcrumb_extra_height + TEXT_BUTTON_GAP + buttons_height
+		+ PANEL_PADDING_BOTTOM + 2 * CARD_BORDER_SIZE
+	local max_html_height = math.max(max_popup_height - fixed_height, Screen:scaleBySize(40))
+
+	-- Every card uses the same fixed overall size (max_popup_height) instead
+	-- of shrinking/growing to fit its own definition text: shorter
+	-- definitions leave blank space below them, longer ones scroll (swipe/tap
+	-- or the scroll bar) via the html widget's own paging, exactly like the
+	-- root lookup already did.
+	self.htmlwidget = self:makeHtmlWidget(content_width, max_html_height)
+	self.height = fixed_height + max_html_height
+
+	local body_rows = {}
+	table.insert(body_rows, VerticalSpan:new({ width = PANEL_PADDING_TOP }))
+	for _, row in ipairs(breadcrumb_rows) do
+		table.insert(body_rows, row)
+	end
+	table.insert(body_rows, HorizontalGroup:new({
+		HorizontalSpan:new({ width = CONTENT_PADDING_LEFT }),
+		self.htmlwidget,
+		HorizontalSpan:new({ width = CONTENT_PADDING_RIGHT }),
+	}))
+	table.insert(body_rows, VerticalSpan:new({ width = TEXT_BUTTON_GAP }))
+	table.insert(body_rows, HorizontalGroup:new({
+		HorizontalSpan:new({ width = CONTENT_PADDING_LEFT }),
+		buttons,
+		HorizontalSpan:new({ width = CONTENT_PADDING_RIGHT }),
+	}))
+	table.insert(body_rows, VerticalSpan:new({ width = PANEL_PADDING_BOTTOM }))
 
 	self.container = FrameContainer:new({
 		background = Blitbuffer.COLOR_WHITE,
@@ -792,27 +1050,13 @@ function FloatingDictionaryPopup:init()
 		radius = CARD_RADIUS,
 		margin = 0,
 		padding = 0,
-		VerticalGroup:new({
-			VerticalSpan:new({ width = PANEL_PADDING_TOP }),
-			HorizontalGroup:new({
-				HorizontalSpan:new({ width = CONTENT_PADDING_LEFT }),
-				self.htmlwidget,
-				HorizontalSpan:new({ width = CONTENT_PADDING_RIGHT }),
-			}),
-			VerticalSpan:new({ width = TEXT_BUTTON_GAP }),
-			HorizontalGroup:new({
-				HorizontalSpan:new({ width = CONTENT_PADDING_LEFT }),
-				buttons,
-				HorizontalSpan:new({ width = CONTENT_PADDING_RIGHT }),
-			}),
-			VerticalSpan:new({ width = PANEL_PADDING_BOTTOM }),
-		}),
+		VerticalGroup:new(body_rows),
 	})
 
 	local card_row = HorizontalGroup:new({
-		HorizontalSpan:new({ width = CARD_OUTER_SIDE_MARGIN }),
+		HorizontalSpan:new({ width = side_margin }),
 		self.container,
-		HorizontalSpan:new({ width = CARD_OUTER_SIDE_MARGIN }),
+		HorizontalSpan:new({ width = side_margin }),
 	})
 
 	if self.anchor_top then
@@ -821,7 +1065,7 @@ function FloatingDictionaryPopup:init()
 		self[1] = TopContainer:new({
 			dimen = Screen:getSize(),
 			VerticalGroup:new({
-				VerticalSpan:new({ width = CARD_OUTER_BOTTOM_MARGIN }),
+				VerticalSpan:new({ width = edge_margin }),
 				card_row,
 			}),
 		})
@@ -830,10 +1074,93 @@ function FloatingDictionaryPopup:init()
 			dimen = Screen:getSize(),
 			VerticalGroup:new({
 				card_row,
-				VerticalSpan:new({ width = CARD_OUTER_BOTTOM_MARGIN }),
+				VerticalSpan:new({ width = edge_margin }),
 			}),
 		})
 	end
+end
+
+-- Builds the cascade breadcrumb strip (e.g. "... -> Patas -> Pelo -> ADN ->
+-- Vivo -> Hidrocarburo"), or returns nil when there's nothing to show (fewer
+-- than 2 steps in the trail). Words are built from the *end* backwards so the
+-- most recent lookup (always kept, always bold) is guaranteed to fit; older
+-- words are added while there's still room, and a leading "..." replaces
+-- whatever didn't fit. The whole thing never exceeds `width`.
+function FloatingDictionaryPopup:makeBreadcrumb(width)
+	local labels = self.breadcrumb_labels
+	if type(labels) ~= "table" or #labels <= 1 then
+		return nil
+	end
+
+	local face = Font:getFace("cfont", BREADCRUMB_FONT_SIZE)
+	local count = #labels
+
+	local function measure(text, bold)
+		local probe = TextWidget:new({ text = text, face = face, bold = bold })
+		local w = probe:getSize().w
+		probe:free()
+		return w
+	end
+
+	local arrow_w = measure(BREADCRUMB_ARROW_TEXT, false)
+	local ellipsis_w = measure(BREADCRUMB_ELLIPSIS_TEXT, false)
+
+	-- Walk backwards from the last (current, bold) word, greedily including
+	-- older steps while they still fit alongside their arrow.
+	local included_from = count + 1 -- lowest index included so far (exclusive bound)
+	local used_width = 0
+
+	for i = count, 1, -1 do
+		local is_last = (i == count)
+		local word_w = measure(labels[i], is_last)
+		local arrow_cost = is_last and 0 or arrow_w
+		local candidate_width = used_width + word_w + arrow_cost
+
+		-- Reserve room for a leading "... -> " unless this is already word 1
+		-- (in which case there's nothing left to truncate, so no ellipsis
+		-- needed and the full trail is used as-is).
+		local reserve = (i > 1) and (ellipsis_w + arrow_w) or 0
+
+		if i < count and candidate_width + reserve > width then
+			break
+		end
+
+		used_width = candidate_width
+		included_from = i
+	end
+
+	-- Degenerate case: even the single last word doesn't fit the width on its
+	-- own. Show just the word (unbounded), rather than nothing at all.
+	if included_from > count then
+		included_from = count
+	end
+
+	local widgets = {}
+	local truncated = included_from > 1
+
+	if truncated then
+		table.insert(widgets, TextWidget:new({ text = BREADCRUMB_ELLIPSIS_TEXT, face = face }))
+		table.insert(widgets, TextWidget:new({ text = BREADCRUMB_ARROW_TEXT, face = face }))
+	end
+
+	for i = included_from, count do
+		local is_last = (i == count)
+		if is_last then
+			table.insert(widgets, TextWidget:new({ text = labels[i], face = face, bold = true }))
+		else
+			table.insert(widgets, BreadcrumbWord:new({
+				text = labels[i],
+				face = face,
+				bold = false,
+				callback = self.breadcrumb_callback and function()
+					self.breadcrumb_callback(i)
+				end,
+			}))
+			table.insert(widgets, TextWidget:new({ text = BREADCRUMB_ARROW_TEXT, face = face }))
+		end
+	end
+
+	return HorizontalGroup:new(widgets)
 end
 
 function FloatingDictionaryPopup:makeButtons(width)
@@ -855,23 +1182,6 @@ function FloatingDictionaryPopup:makeButtons(width)
 		})
 	end
 
-	table.insert(button_specs, {
-		spec = { text = "A-" },
-		callback = function()
-			return self:onDecreaseFontSize()
-		end,
-	})
-
-	table.insert(button_specs, {
-		spec = { text = "A+" },
-		callback = function()
-			return self:onIncreaseFontSize()
-		end,
-	})
-
-	-- Always present, never hidden and never listed in the button-visibility
-	-- menu it opens: this is the control for that menu, not one of the
-	-- toggleable actions.
 	table.insert(button_specs, {
 		spec = { icon = ICON_SETTINGS },
 		callback = function()
@@ -956,39 +1266,6 @@ function FloatingDictionaryPopup:makeHtmlWidget(content_width, height)
 	})
 end
 
-function FloatingDictionaryPopup:makeSizedHtmlWidget(content_width, max_height, height_profile)
-	local min_height = height_profile.min_height
-	local compact_cap = height_profile.compact_cap
-	local is_compact = compact_cap ~= nil
-	local measure_height = is_compact and compact_cap or max_height
-	measure_height = math.max(1, math.min(max_height, measure_height))
-
-	local htmlwidget = self:makeHtmlWidget(content_width, measure_height)
-	local height = is_compact and measure_height or min_height
-
-	local ok, single_page_height = pcall(function()
-		return htmlwidget:getSinglePageHeight()
-	end)
-
-	if ok and type(single_page_height) == "number" and single_page_height > 0 then
-		local measurement_safety = is_compact and 0 or math.ceil(self.doc_font_size * 0.35)
-		height = math.ceil(single_page_height + measurement_safety)
-		height = math.max(min_height, math.min(max_height, height))
-
-		if is_compact then
-			height = math.max(1, math.min(height, compact_cap))
-		end
-	else
-		height = math.max(1, math.min(max_height, height))
-	end
-
-	if height ~= measure_height then
-		htmlwidget = self:makeHtmlWidget(content_width, height)
-	end
-
-	return htmlwidget, height
-end
-
 function FloatingDictionaryPopup:onShow()
 	UIManager:setDirty(self.dialog, function()
 		return "ui", self.container.dimen
@@ -1002,10 +1279,10 @@ function FloatingDictionaryPopup:onCloseWidget()
 end
 
 function FloatingDictionaryPopup:onClose()
-	UIManager:close(self)
 	if self.close_preview_callback then
 		return self.close_preview_callback()
 	end
+	UIManager:close(self)
 	return true
 end
 
@@ -1083,6 +1360,40 @@ function FloatingDictionaryPopup:onTapClose(_arg, ges)
 	end
 
 	return false
+end
+
+function FloatingDictionaryPopup:onHoldStartText(_arg, ges)
+	local box = self.htmlwidget and self.htmlwidget.htmlbox_widget
+	if not box or not box.onHoldStartText then
+		return false
+	end
+	return box:onHoldStartText(_arg, ges)
+end
+
+function FloatingDictionaryPopup:onHoldPanText(_arg, ges)
+	local box = self.htmlwidget and self.htmlwidget.htmlbox_widget
+	if not box or not box.onHoldPanText then
+		return false
+	end
+	return box:onHoldPanText(_arg, ges)
+end
+
+function FloatingDictionaryPopup:onHoldReleaseText(_arg, ges)
+	local box = self.htmlwidget and self.htmlwidget.htmlbox_widget
+	if not box or not box.onHoldReleaseText then
+		return false
+	end
+
+	local selected_text
+	local ok = box:onHoldReleaseText(function(text)
+		selected_text = text
+	end, ges)
+
+	if selected_text and selected_text ~= "" and self.lookup_word_callback then
+		self.lookup_word_callback(selected_text)
+	end
+
+	return ok
 end
 
 function FloatingDictionaryPopup:onSwipeFollow(_arg, ges)
@@ -1198,7 +1509,8 @@ end
 
 function FloatingDictionary:init()
 	self.enabled = self:isPreviewEnabled()
-	self.current_popup = nil
+	self.current_popup = nil -- kept for backwards compatibility; always mirrors the stack's top
+	self.popup_stack = {} -- ordered list of currently shown preview cards, bottom to top
 	self.original_showDict = nil
 	self.patched_dictionary = nil
 	self.opening_original_popup = false
@@ -1206,6 +1518,15 @@ function FloatingDictionary:init()
 	self.native_dict_popup_count = 0
 	self.selection_snapshot = nil
 	self.plugin_icon_cache = {}
+
+	-- Cascade state: ordered list of frames { word, results, boxes, link,
+	-- dict_close_callback } representing the trail of lookups in the current
+	-- session, plus the dict_self/anchor decided by the *root* lookup (reused
+	-- for every cascaded step so the card doesn't jump top/bottom mid-trail).
+	self.cascade_history = {}
+	self.cascade_anchor_top = false
+	self.cascade_dict_self = nil
+	self.pending_cascade_step = false -- set true right before triggering a lookup from a held/selected word inside a popup, so showPreview treats it as a cascade push instead of a fresh root lookup
 
 	if self.ui and self.ui.menu then
 		self.ui.menu:registerToMainMenu(self)
@@ -1253,6 +1574,16 @@ function FloatingDictionary:addToMainMenu(menu_items)
 				end,
 				callback = function()
 					self:setShowExternalButtonsEnabled(not self:isShowExternalButtonsEnabled())
+				end,
+			},
+			{
+				text = _("Cascading lookups (stacked cards + breadcrumb)"),
+				help_text = _("When a word inside a definition is looked up, keep the previous definition open underneath (stacked, up to 4 levels) with a breadcrumb trail on top to navigate back. When disabled, a new lookup simply replaces the current one, as before."),
+				checked_func = function()
+					return self:isCascadeEnabled()
+				end,
+				callback = function()
+					self:setCascadeEnabled(not self:isCascadeEnabled())
 				end,
 				separator = true,
 			},
@@ -1377,9 +1708,6 @@ function FloatingDictionary:getVisibleActionsSetting()
 end
 
 function FloatingDictionary:isActionVisible(action_id)
-	if action_id == ACTION_NAV_PREV or action_id == ACTION_NAV_NEXT then
-		return true -- navigation arrows can be reordered but never hidden
-	end
 	if action_id == ACTION_EXTERNAL then
 		return self:isShowExternalButtonsEnabled()
 	end
@@ -1391,9 +1719,6 @@ function FloatingDictionary:isActionVisible(action_id)
 end
 
 function FloatingDictionary:setActionVisible(action_id, visible)
-	if action_id == ACTION_NAV_PREV or action_id == ACTION_NAV_NEXT then
-		return -- can't be hidden, only reordered
-	end
 	if action_id == ACTION_EXTERNAL then
 		self:setShowExternalButtonsEnabled(visible)
 		return
@@ -1480,6 +1805,21 @@ function FloatingDictionary:setShowExternalButtonsEnabled(enabled)
 	G_reader_settings:saveSetting(SETTING_SHOW_EXTERNAL_BUTTONS, enabled and true or false)
 end
 
+-- Cascading lookups: tapping a cross-reference link inside a definition
+-- stacks on top of the previous lookup (with a breadcrumb trail) instead of
+-- just replacing it. Disabling this makes every lookup behave like a plain
+-- new search again, with no breadcrumb.
+function FloatingDictionary:isCascadeEnabled()
+	return G_reader_settings:nilOrTrue(SETTING_CASCADE_ENABLED)
+end
+
+function FloatingDictionary:setCascadeEnabled(enabled)
+	G_reader_settings:saveSetting(SETTING_CASCADE_ENABLED, enabled and true or false)
+	if not enabled then
+		self.cascade_history = {}
+	end
+end
+
 -- The vocabulary-builder button only makes sense if that plugin is enabled.
 function FloatingDictionary:hasVocabBuilder()
 	return self.ui and self.ui.vocabbuilder ~= nil
@@ -1551,13 +1891,12 @@ function FloatingDictionary:genVisibleActionsMenu()
 	local items = {}
 
 	for _, action in ipairs(self:getOrderedActions()) do
-		-- Navigation arrows and the external-plugins group have their own
-		-- dedicated handling (swipe gestures always work regardless of
-		-- footer visibility; the external toggle already has its own menu
-		-- entry above), so only the plain dictionary actions show up here.
-		-- All of them, including these, are still reorderable from the
-		-- gear-icon settings popup shown from the preview itself.
-		if not action.kind then
+		-- The external-plugins group has its own dedicated toggle entry
+		-- above, so it's skipped here. Navigation arrows and font size
+		-- buttons (A+/A-) have a `kind` too but are now plain toggleable
+		-- actions like Highlight, so they're included.
+		local is_external = action.kind == "external"
+		if not is_external then
 			table.insert(items, {
 				text = action.label,
 				enabled_func = function()
@@ -1716,38 +2055,22 @@ function FloatingDictionary:showButtonSettingsMenu(on_close)
 		for list_pos, action_id in ipairs(visible_ids) do
 			local action = ACTION_BY_ID[action_id]
 			local initial = getButtonInitial(action.short_label or action.label)
-			local is_navigation = action.id == ACTION_NAV_PREV or action.id == ACTION_NAV_NEXT
 			local is_first = list_pos == 1
 			local is_last = list_pos == #visible_ids
 			local arrow_count = (is_first and 0 or 1) + (is_last and 0 or 1)
 
 			local row_widgets = {}
 
-			if is_navigation then
-				-- Show the actual chevron icon used in the footer (not just
-				-- its name), so it's obvious at a glance which button this
-				-- row refers to. Navigation arrows can be reordered but
-				-- never hidden, so there's no checkbox and no tap-to-toggle.
-				local nav_icon = action.id == ACTION_NAV_PREV and ICON_PREVIOUS or ICON_NEXT
-				table.insert(row_widgets, makeIconChip(nav_icon, ARROW_WIDTH, nil))
-				table.insert(row_widgets, makeChip(
-					action.label,
-					POPUP_WIDTH - ARROW_WIDTH - arrow_count * ARROW_WIDTH,
-					nil,
-					"left"
-				))
-			else
-				local checkbox = self:isActionVisible(action.id) and CHECKBOX_ON or CHECKBOX_OFF
-				table.insert(row_widgets, makeChip(
-					string.format("%s  %s  %s", checkbox, initial, action.label),
-					POPUP_WIDTH - arrow_count * ARROW_WIDTH,
-					function()
-						self:setActionVisible(action.id, not self:isActionVisible(action.id))
-						rebuild()
-					end,
-					"left"
-				))
-			end
+			local checkbox = self:isActionVisible(action.id) and CHECKBOX_ON or CHECKBOX_OFF
+			table.insert(row_widgets, makeChip(
+				string.format("%s  %s  %s", checkbox, initial, action.label),
+				POPUP_WIDTH - arrow_count * ARROW_WIDTH,
+				function()
+					self:setActionVisible(action.id, not self:isActionVisible(action.id))
+					rebuild()
+				end,
+				"left"
+			))
 
 			-- ↑ and ↓ are two separate tappable chips (not one shared zone),
 			-- so either can be pressed on its own, and they always sit at
@@ -1919,11 +2242,66 @@ function FloatingDictionary:showButtonSettingsMenu(on_close)
 	rebuild()
 end
 
-function FloatingDictionary:destroy()
-	if self.current_popup then
-		UIManager:close(self.current_popup)
-		self.current_popup = nil
+-- Cascade stack helpers -------------------------------------------------
+-- These operate on self.popup_stack / self.cascade_history, which are kept
+-- in lockstep: popup_stack[i] is always the card currently showing
+-- cascade_history[i]. self.current_popup is kept pointing at the top of the
+-- stack purely for backwards compatibility with older code paths.
+
+-- Closes and removes the single topmost card, without touching anything
+-- below it (which is already alive and simply becomes visible again).
+-- Returns the cascade_history frame that was removed, if any.
+-- @param invoke_callback (default true) whether to fire that frame's own
+--        dict_close_callback; pass false when ownership of it is being
+--        handed off elsewhere (e.g. to the native dictionary popup).
+function FloatingDictionary:closeStackTop(invoke_callback)
+	local stack = self.popup_stack
+	if not stack or #stack == 0 then
+		return nil
 	end
+
+	local popup = table.remove(stack)
+	pcall(function()
+		FloatingDictAnim.animateClose(popup, true)
+	end)
+	self.current_popup = stack[#stack]
+
+	local frame = table.remove(self.cascade_history)
+	if invoke_callback ~= false and frame and frame.dict_close_callback then
+		pcall(frame.dict_close_callback)
+	end
+	return frame
+end
+
+-- Closes every card in the stack, bottom to top. Used when a brand new
+-- (non-cascaded) lookup starts and should replace the whole trail.
+function FloatingDictionary:closeAllCards(invoke_callbacks)
+	while self.popup_stack and #self.popup_stack > 0 do
+		self:closeStackTop(invoke_callbacks)
+	end
+end
+
+-- Dismisses the current topmost card (tap-outside/swipe/Back on it). If that
+-- was the last card in the stack, ends the whole lookup session: clears the
+-- book highlight/selection tied to the root lookup. Otherwise, the card
+-- below it is simply left showing -- no rebuild needed.
+-- Dismisses the whole cascade (tap-outside/swipe/Back on the topmost card):
+-- closes every card in the stack and ends the lookup session, clearing the
+-- book highlight/selection tied to the root lookup.
+function FloatingDictionary:popCard()
+	local dict_self = self.cascade_dict_self
+	self:closeAllCards()
+	self.cascade_history = {}
+	self.cascade_dict_self = nil
+	self.selection_snapshot = nil
+	self:clearOriginalHighlight(dict_self)
+	self:clearSelection()
+
+	return true
+end
+
+function FloatingDictionary:destroy()
+	self:closeAllCards(false)
 
 	if self.patched_dictionary and self.original_showDict and self.patched_dictionary._floatingdictionary_patched then
 		self.patched_dictionary.showDict = self.original_showDict
@@ -1934,6 +2312,8 @@ function FloatingDictionary:destroy()
 	self.patched_dictionary = nil
 	self.selection_snapshot = nil
 	self.plugin_icon_cache = nil
+	self.cascade_history = {}
+	self.cascade_dict_self = nil
 	self:resetNativeDictionaryPopupGuard()
 
 	if WidgetContainer.destroy then
@@ -2492,7 +2872,12 @@ function FloatingDictionary:discoverExternalButtons(dict_self, word, result, res
 end
 
 function FloatingDictionary:runAction(action_id, dict_self, search_text, dict_close_callback)
-	self.current_popup = nil
+	-- The card that triggered this was already closed by onActionButton;
+	-- any cards still stacked underneath it are no longer needed either,
+	-- since choosing an action (Highlight, Wikipedia, Search, ...) ends the
+	-- whole lookup session. Their own dict_close_callbacks are skipped since
+	-- dict_close_callback (this action's own) is about to run instead.
+	self:closeAllCards(false)
 
 	if action_id == ACTION_HIGHLIGHT then
 		-- Do not clear the selection before highlighting. ReaderHighlight needs
@@ -2679,53 +3064,212 @@ local function shouldAnchorTop(boxes)
 	return selection_bottom > (Screen:getHeight() / 2)
 end
 
+-- Entry point called by the patched ReaderDictionary:showDict, for *every*
+-- lookup: the original one triggered by selecting/holding text in the book,
+-- and any follow-up triggered by tapping a cross-reference link inside a
+-- definition we're already showing (KOReader routes both through the same
+-- showDict call; the follow-up case is recognizable because `link` is set
+-- and a cascade is already in progress). We only decide here whether this
+-- is a new root lookup or a continuation of the current cascade; the actual
+-- popup construction lives in renderCascadeFrame() so a breadcrumb tap can
+-- reuse it without re-running this decision.
 function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, dict_close_callback)
+	if #buildPreviewResults(results) <= 0 then
+		return true
+	end
+
+	local cascade_on = self:isCascadeEnabled()
+	local is_cascade_step = cascade_on
+		and (link ~= nil or self.pending_cascade_step)
+		and #self.cascade_history > 0
+	self.pending_cascade_step = false
+
+	local frame = {
+		word = word,
+		results = results,
+		boxes = boxes,
+		link = link,
+		dict_close_callback = dict_close_callback,
+	}
+
+	if is_cascade_step then
+		-- Continuing an existing cascade: this new card stacks *on top of*
+		-- the one currently shown, which stays open underneath it (renderCascadeFrame
+		-- pushes rather than replaces). Don't touch popup_stack here.
+		table.insert(self.cascade_history, frame)
+
+		-- Depth cap: rather than growing forever, slide the window forward
+		-- by dropping the oldest (bottom-most, most hidden) card.
+		if #self.cascade_history > CASCADE_MAX_DEPTH then
+			table.remove(self.cascade_history, 1)
+			local dropped = table.remove(self.popup_stack, 1)
+			if dropped then
+				pcall(function()
+					UIManager:close(dropped)
+				end)
+			end
+		end
+	else
+		-- Brand new (non-cascaded) lookup: close the whole stack and start
+		-- (or restart) the trail fresh. Its own selection boxes decide
+		-- top/bottom anchoring for the whole session.
+		self:closeAllCards()
+		self.cascade_history = { frame }
+		self.cascade_anchor_top = shouldAnchorTop(boxes)
+	end
+
+	self.cascade_dict_self = dict_self
+
+	return self:renderCascadeFrame()
+end
+
+-- Fired by a popup's onHoldReleaseText when the user selects a word inside an
+-- already-open definition. Routes through the same ui:handleEvent("LookupWord")
+-- path KOReader's own text selection uses, so it reuses stock sdcv/wiki lookup
+-- logic; the patched showDict then picks up the result. pending_cascade_step
+-- tells showPreview to push this as a new cascade frame instead of treating it
+-- as a fresh root lookup that would wipe the stack.
+function FloatingDictionary:lookupSelectedWord(dict_self, text)
+	if not text or text == "" then
+		return true
+	end
+	dict_self = dict_self or (self.ui and self.ui.dictionary)
+	if not dict_self or type(dict_self.onLookupWord) ~= "function" then
+		return true
+	end
+
+	local highlight = self.ui and self.ui.highlight
+
+	-- onLookupWord's signature has changed across KOReader versions:
+	--   older: (word, box, highlight, link)
+	--   newer: (word, is_sane, box, highlight, link, dict_close_callback)
+	-- debug.getinfo tells us how many declared params this build has (the
+	-- colon-defined method includes an implicit leading `self`), so we call
+	-- with the matching shape instead of guessing and risking a double fire.
+	local nparams
+	local info_ok, info = pcall(debug.getinfo, dict_self.onLookupWord, "u")
+	if info_ok and info then
+		nparams = info.nparams
+	end
+	logger.warn("FloatingDictionary: lookupSelectedWord text=", text, "nparams=", nparams, "highlight=", highlight)
+
+	self.pending_cascade_step = true
+	local ok, err
+	if nparams and nparams >= 6 then
+		ok, err = pcall(function()
+			dict_self:onLookupWord(text, false, nil, highlight, nil)
+		end)
+	else
+		ok, err = pcall(function()
+			dict_self:onLookupWord(text, nil, highlight, nil)
+		end)
+	end
+	logger.warn("FloatingDictionary: onLookupWord call ok=", ok, "err=", err)
+	if not ok then
+		self.pending_cascade_step = false
+	end
+
+	return true
+end
+
+-- Tapping a non-current breadcrumb word: close every card cascaded after it,
+-- then re-render that card. The target may or may not still be alive
+-- underneath (it survives unless it was dropped by the CASCADE_MAX_DEPTH
+-- limit), so this always explicitly re-renders it instead of assuming it's
+-- already showing. Tapping the current (bold, last) word is a no-op.
+function FloatingDictionary:onBreadcrumbSelect(index)
+	if type(index) ~= "number" or index < 1 or index >= #self.cascade_history then
+		return true
+	end
+
+	while #self.cascade_history > index do
+		self:closeStackTop()
+	end
+
+	return self:renderCascadeFrame(true)
+end
+
+-- Builds and shows a new card for whatever was just pushed onto (or is now
+-- the tail of) self.cascade_history, stacking it on top of any earlier
+-- cascade cards -- which stay open underneath, untouched. Pure rendering
+-- for that one new card: does not itself touch earlier stack entries.
+function FloatingDictionary:renderCascadeFrame(open_forward)
+	if open_forward == nil then
+		open_forward = false
+	end
+	local depth = #self.cascade_history
+	local top = self.cascade_history[depth]
+	if not top then
+		return true
+	end
+
+	local dict_self = self.cascade_dict_self
+	local word, results, boxes, link, dict_close_callback =
+		top.word, top.results, top.boxes, top.link, top.dict_close_callback
+
 	local preview_results = buildPreviewResults(results)
-	local anchor_top = shouldAnchorTop(boxes)
+	local anchor_top = self.cascade_anchor_top
 	local preview_count = #preview_results
 
 	if preview_count <= 0 then
 		return true
 	end
 
-	if self.current_popup then
-		UIManager:close(self.current_popup)
-		self.current_popup = nil
+	-- Only from the 2nd step onward, and only while the toggle is on (it may
+	-- have been switched off mid-session).
+	local breadcrumb_labels = nil
+	if self:isCascadeEnabled() and depth > 1 then
+		breadcrumb_labels = {}
+		for _, cascade_frame in ipairs(self.cascade_history) do
+			table.insert(breadcrumb_labels, cascade_frame.word or "")
+		end
 	end
 
 	local popup
 	local opened_full_popup = false
 	local current_index = 1
+	local stack_had_this_frame = false
 
+	-- Replaces *this* card in place (same cascade level: paging between
+	-- dictionary results, changing font size, etc.) -- not a stack push.
+	-- On the very first call for this frame, `popup` is still nil, so this
+	-- is a no-op and the card below ends up freshly pushed further down.
 	local function closeCurrentPopup()
 		if popup then
 			pcall(function()
 				UIManager:close(popup)
 			end)
+			local stack = self.popup_stack
+			if stack[#stack] == popup then
+				table.remove(stack)
+			end
 			popup = nil
 		end
-		self.current_popup = nil
 	end
 
 	local function openFullPopup(index)
 		opened_full_popup = true
-		closeCurrentPopup()
+		-- Escalating to the full native dictionary window ends the whole
+		-- cascade: close every stacked card (this one and any older ones
+		-- still underneath it). Their dict_close_callbacks are skipped;
+		-- this frame's own dict_close_callback is handed off below instead.
+		self:closeAllCards(false)
+		popup = nil
 
 		local preview_index = normalizeResultIndex(index or current_index, preview_count)
 		local source_index = preview_results[preview_index] and preview_results[preview_index].source_index or 1
 		local selected_results = reorderResultsFromIndex(results, source_index)
+		self.cascade_history = {}
 		return self:showOriginalDictionaryPopup(dict_self, word, selected_results, boxes, link, dict_close_callback)
 	end
 
+	-- Fired by the card's own tap-outside/swipe/Back dismissal. Pops just
+	-- this one card; if there's a cascade card underneath, it's simply left
+	-- showing (already alive, nothing to rebuild). Only ends the whole
+	-- session (clearing highlight/selection) if this was the last card.
 	local function closePreview()
 		if not opened_full_popup then
-			self.current_popup = nil
-			self.selection_snapshot = nil
-			self:clearOriginalHighlight(dict_self)
-			self:clearSelection()
-			if dict_close_callback then
-				pcall(dict_close_callback)
-			end
+			self:popCard()
 		end
 		return true
 	end
@@ -2756,6 +3300,22 @@ function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, d
 						if preview_count > 1 then
 							return showResult(current_index + 1)
 						end
+					end,
+				})
+			elseif action.kind == "font_decrease" then
+				table.insert(action_specs, {
+					spec = { text = "A-" },
+					callback = function()
+						self:setFontSizeDelta(self:getFontSizeDelta() - FONT_SIZE_STEP)
+						return showResult(current_index)
+					end,
+				})
+			elseif action.kind == "font_increase" then
+				table.insert(action_specs, {
+					spec = { text = "A+" },
+					callback = function()
+						self:setFontSizeDelta(self:getFontSizeDelta() + FONT_SIZE_STEP)
+						return showResult(current_index)
 					end,
 				})
 			elseif action.kind == "external" then
@@ -2795,6 +3355,13 @@ function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, d
 			dialog = dict_self and dict_self.dialog,
 			result_count = preview_count,
 			anchor_top = anchor_top,
+			breadcrumb_labels = breadcrumb_labels,
+			breadcrumb_callback = function(index)
+				return self:onBreadcrumbSelect(index)
+			end,
+			lookup_word_callback = function(text)
+				return self:lookupSelectedWord(dict_self, text)
+			end,
 			actions = action_specs,
 			open_callback = function()
 				return openFullPopup(current_index)
@@ -2821,8 +3388,22 @@ function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, d
 			close_preview_callback = closePreview,
 		})
 
+		local is_new_card = not stack_had_this_frame
+		stack_had_this_frame = true
+
+		table.insert(self.popup_stack, popup)
 		self.current_popup = popup
-		UIManager:show(popup)
+		if is_new_card then
+			-- Brand new card for this cascade frame: left-to-right when it's
+			-- a fresh cascade step (root lookup or selecting a word), or
+			-- right-to-left when it's re-rendered after going back via the
+			-- breadcrumb.
+			FloatingDictAnim.animateShow(popup, open_forward)
+		else
+			-- Same cascade level being redrawn in place (paging results,
+			-- font size change, etc.): no transition, just show.
+			UIManager:show(popup)
+		end
 		return true
 	end
 
