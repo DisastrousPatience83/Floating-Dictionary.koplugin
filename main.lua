@@ -3,6 +3,7 @@ local Blitbuffer = require("ffi/blitbuffer")
 local BottomContainer = require("ui/widget/container/bottomcontainer")
 local TopContainer = require("ui/widget/container/topcontainer")
 local CenterContainer = require("ui/widget/container/centercontainer")
+local DataStorage = require("datastorage")
 local Font = require("ui/font")
 local FontList = require("fontlist")
 local IconWidget = require("ui/widget/iconwidget")
@@ -24,6 +25,7 @@ local util = require("util")
 local T = require("ffi/util").template
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 local Notification = require("ui/widget/notification")
 local _ = require("gettext")
@@ -291,15 +293,19 @@ local SETTING_VISIBLE_ACTIONS = "floatingdictionary_visible_actions"
 local SETTING_ACTIONS_ORDER = "floatingdictionary_actions_order"
 local SETTING_SHOW_EXTERNAL_BUTTONS = "floatingdictionary_show_external_buttons"
 local SETTING_FONT_SIZE_DELTA = "floatingdictionary_font_size_delta"
--- Whether tapping a cross-reference link inside a definition (which KOReader
--- re-routes through ReaderDictionary:showDict, same as any other lookup) opens
--- as a "cascade": stacked on top of the previous lookup with a breadcrumb
--- trail, instead of just replacing it like a plain new search would.
-local SETTING_CASCADE_ENABLED = "floatingdictionary_cascade_enabled"
+-- Cascading lookups (tapping a cross-reference link inside a definition,
+-- which KOReader re-routes through ReaderDictionary:showDict, same as any
+-- other lookup) always stack on top of the previous lookup with a
+-- breadcrumb trail; this is no longer a user-configurable option.
 -- Name (not path) of a font face the user picked from the settings menu to
 -- always use in the preview, overriding the book/global-CRE font detection
 -- done by getDocFontFamily(). nil/unset means "use the book's font" (default).
 local SETTING_FONT_FAMILY = "floatingdictionary_font_family"
+-- Translation dictionaries are no longer picked by the user: the plugin
+-- auto-detects the looked-up word's language from its own spelling and
+-- automatically prefers whichever installed dictionaries look like
+-- translation dictionaries for that language pair. See guessWordLanguage()
+-- and getTranslationDictionaries() below.
 
 -- How much A+/A- changes the popup's text size by, and how far it can go
 -- in either direction relative to UI_FONT_SIZE. Does not affect the footer
@@ -1575,16 +1581,6 @@ function FloatingDictionary:addToMainMenu(menu_items)
 				callback = function()
 					self:setShowExternalButtonsEnabled(not self:isShowExternalButtonsEnabled())
 				end,
-			},
-			{
-				text = _("Cascading lookups (stacked cards + breadcrumb)"),
-				help_text = _("When a word inside a definition is looked up, keep the previous definition open underneath (stacked, up to 4 levels) with a breadcrumb trail on top to navigate back. When disabled, a new lookup simply replaces the current one, as before."),
-				checked_func = function()
-					return self:isCascadeEnabled()
-				end,
-				callback = function()
-					self:setCascadeEnabled(not self:isCascadeEnabled())
-				end,
 				separator = true,
 			},
 		},
@@ -1803,21 +1799,6 @@ end
 
 function FloatingDictionary:setShowExternalButtonsEnabled(enabled)
 	G_reader_settings:saveSetting(SETTING_SHOW_EXTERNAL_BUTTONS, enabled and true or false)
-end
-
--- Cascading lookups: tapping a cross-reference link inside a definition
--- stacks on top of the previous lookup (with a breadcrumb trail) instead of
--- just replacing it. Disabling this makes every lookup behave like a plain
--- new search again, with no breadcrumb.
-function FloatingDictionary:isCascadeEnabled()
-	return G_reader_settings:nilOrTrue(SETTING_CASCADE_ENABLED)
-end
-
-function FloatingDictionary:setCascadeEnabled(enabled)
-	G_reader_settings:saveSetting(SETTING_CASCADE_ENABLED, enabled and true or false)
-	if not enabled then
-		self.cascade_history = {}
-	end
 end
 
 -- The vocabulary-builder button only makes sense if that plugin is enabled.
@@ -2907,15 +2888,315 @@ function FloatingDictionary:runAction(action_id, dict_self, search_text, dict_cl
 	return self:showSearchDialog(search_text)
 end
 
+-- Extracts a short "quick translation" string out of a translation
+-- dictionary's (usually HTML) definition, for display as
+-- "word &#8594; translation" next to the headword. Tries a few structural
+-- patterns common in bilingual sdcv dictionaries before falling back to
+-- just taking the first line of plain text.
+function FloatingDictionary:extractPrimaryTranslation(definition)
+	if not definition or definition == "" then
+		return ""
+	end
+
+	-- 1. Strip <font class="grammar">...</font>-style tags and similar.
+	local clean_html = definition:gsub("<font[^>]*>.-</font>", "")
+
+	-- 2. First try inside <li><div>...</div></li> list items.
+	for match in clean_html:gmatch("<li>%s*<div[^>]*>%s*([^<]+)%s*</div>%s*</li>") do
+		local trimmed = match:match("^%s*(.-)%s*$")
+		if trimmed and #trimmed > 0 then
+			return trimmed
+		end
+	end
+
+	-- 3. Then try plain <div>...</div> blocks.
+	for match in clean_html:gmatch("<div[^>]*>%s*([^<]+)%s*</div>") do
+		local trimmed = match:match("^%s*(.-)%s*$")
+		if trimmed and #trimmed > 0 then
+			return trimmed
+		end
+	end
+
+	-- 4. Fallback: first line of the plain-text definition.
+	local plain_text = definition:gsub("<[^>]+>", ""):match("^%s*(.-)%s*$")
+	if plain_text and #plain_text > 0 then
+		local first_line = plain_text:match("([^\r\n]+)")
+		if first_line then
+			return first_line:match("^%s*(.-)%s*$")
+		end
+		return plain_text
+	end
+
+	return ""
+end
+
+-- Translation-dictionary auto-detection -----------------------------------
+-- Independent from the definition dictionaries already used for the card
+-- body: this automatically decides which installed sdcv dictionary(ies)
+-- are queried for the short "word -> translation" quick preview next to
+-- the headword, based purely on the detected language of the looked-up
+-- word -- no user configuration involved (see below).
+
+-- Language auto-detection ------------------------------------------------
+-- The plugin no longer asks the user to pick translation dictionaries by
+-- hand. Instead it guesses the looked-up word's language from its own
+-- spelling, then automatically figures out which installed dictionaries are
+-- "translation dictionaries" (bilingual, e.g. an English->Spanish sdcv
+-- dictionary) and prioritizes the ones matching the detected language pair.
+-- This is designed to scale to more languages later without any settings
+-- UI: adding a new language just means adding its detection rule and
+-- dictionary-name hints below.
+
+-- Small per-language detection rules. Each entry provides:
+--   code       ISO-ish short code used internally (also often what shows up
+--              in dictionary names, e.g. "es-en", "EN-ES", "spa-eng").
+--   chars      a UTF-8 byte-class matching characters distinctive of this
+--              language (accented letters, special punctuation, etc.).
+--   words      common short function words/particles for this language.
+--   endings    common word endings for this language.
+--   names      extra name fragments/aliases used to recognize this language
+--              in dictionary booknames (ISO 639-1/639-2 codes, English and
+--              native language names, etc.).
+local LANGUAGE_RULES = {
+	{
+		code = "es",
+		chars = "[\xC3\xA1\xC3\xA9\xC3\xAD\xC3\xB3\xC3\xBA\xC3\xB1\xC2\xBF\xC2\xA1]", -- á é í ó ú ñ ¿ ¡
+		words = { "^el ", "^la ", "^los ", "^las ", "^un ", "^una ", "^de ", "^que " },
+		endings = { "ci\xC3\xB3n$", "mente$", "^ll" },
+		names = { "es", "spa", "spanish", "espa\xC3\xB1ol", "castellano" },
+	},
+	{
+		code = "en",
+		chars = nil,
+		words = { "^the ", "^an? ", "^of " },
+		endings = { "ing$", "tion$", "ly$" },
+		names = { "en", "eng", "english", "ingl\xC3\xA9s" },
+	},
+}
+
+local DEFAULT_LANGUAGE = "en"
+
+-- Rough heuristic to guess a looked-up word/phrase's language, purely from
+-- its own spelling -- no book metadata involved. Falls back to
+-- DEFAULT_LANGUAGE when nothing distinctive is found, since sdcv will
+-- simply return no_result if that guess is wrong and nothing gets shown.
+function FloatingDictionary:guessWordLanguage(word)
+	word = tostring(word or ""):lower()
+	if word == "" then
+		return DEFAULT_LANGUAGE
+	end
+
+	for _, rule in ipairs(LANGUAGE_RULES) do
+		if rule.chars and word:find(rule.chars) then
+			return rule.code
+		end
+	end
+
+	for _, rule in ipairs(LANGUAGE_RULES) do
+		for _, pattern in ipairs(rule.words or {}) do
+			if word:find(pattern) then
+				return rule.code
+			end
+		end
+		for _, pattern in ipairs(rule.endings or {}) do
+			if word:find(pattern) then
+				return rule.code
+			end
+		end
+	end
+
+	return DEFAULT_LANGUAGE
+end
+
+-- Tries to recognize a language code/name fragment inside an installed
+-- dictionary's display name (e.g. "English-Spanish", "es-en Diccionario",
+-- "Spanish Translation Dictionary"). Returns the LANGUAGE_RULES code, or
+-- nil if nothing recognizable was found.
+local function findLanguageInDictName(lower_name, rule)
+	for _, alias in ipairs(rule.names or {}) do
+		-- Match as a whole "word" (surrounded by non-letters or string
+		-- edges) so e.g. "es" doesn't match inside "best" or "testing".
+		if lower_name:find("%f[%a]" .. alias .. "%f[%A]") then
+			return true
+		end
+	end
+	return false
+end
+
+-- Heuristically decides whether an installed dictionary looks like a
+-- bilingual "translation dictionary" (as opposed to a monolingual
+-- definitions dictionary), and if so, which language(s) it connects.
+-- A dictionary counts as a translation dictionary when its name mentions
+-- two different known languages (e.g. "English-Spanish"), or the word
+-- "translation"/"traducci\xC3\xB3n" together with at least one known language.
+local function classifyDictionaryName(dict_name)
+	local lower_name = tostring(dict_name or ""):lower()
+	local matched_codes = {}
+
+	for _, rule in ipairs(LANGUAGE_RULES) do
+		if findLanguageInDictName(lower_name, rule) then
+			table.insert(matched_codes, rule.code)
+		end
+	end
+
+	local mentions_translation = lower_name:find("translat")
+		or lower_name:find("traducc")
+		or lower_name:find("traduc")
+
+	local is_translation_dict = (#matched_codes >= 2) or (mentions_translation and #matched_codes >= 1)
+
+	return is_translation_dict, matched_codes
+end
+
+-- Scans installed dictionaries and automatically builds the list to query
+-- for the quick "word -> translation" preview: every installed dictionary
+-- that looks like a translation dictionary (see classifyDictionaryName)
+-- and is relevant to the detected source language, ordered so the best
+-- language match comes first. No user configuration involved.
+function FloatingDictionary:getTranslationDictionaries(word)
+	local source_lang = self:guessWordLanguage(word)
+	local installed = self:getInstalledDictionaryNames()
+
+	local matching = {}
+	local other_translation = {}
+
+	for _, dict_name in ipairs(installed) do
+		local is_translation_dict, matched_codes = classifyDictionaryName(dict_name)
+		if is_translation_dict then
+			local matches_source = false
+			for _, code in ipairs(matched_codes) do
+				if code == source_lang then
+					matches_source = true
+					break
+				end
+			end
+			if matches_source then
+				table.insert(matching, dict_name)
+			else
+				table.insert(other_translation, dict_name)
+			end
+		end
+	end
+
+	-- Dictionaries matching the detected source language first, then any
+	-- other translation dictionaries as a fallback (e.g. only one
+	-- translation dictionary is installed and the language guess was off).
+	local ordered = {}
+	for _, name in ipairs(matching) do
+		table.insert(ordered, name)
+	end
+	for _, name in ipairs(other_translation) do
+		table.insert(ordered, name)
+	end
+
+	return ordered
+end
+
+-- Scans the StarDict data directories (same layout ReaderDictionary uses)
+-- for installed dictionaries' display names, so the settings menu can list
+-- them as checkable options without the user typing anything by hand.
+function FloatingDictionary:getInstalledDictionaryNames()
+	local names = {}
+	local seen = {}
+
+	if self.ui and self.ui.dictionary and self.ui.dictionary.enabled_dict_names then
+		for _, name in ipairs(self.ui.dictionary.enabled_dict_names) do
+			if not seen[name] then
+				table.insert(names, name)
+				seen[name] = true
+			end
+		end
+	end
+
+	local data_dir = (self.ui and self.ui.dictionary and self.ui.dictionary.data_dir)
+		or (G_defaults and G_defaults:readSetting("STARDICT_DATA_DIR"))
+		or (os.getenv("STARDICT_DATA_DIR"))
+		or (DataStorage:getDataDir() .. "/data/dict")
+
+	local function scanDir(path)
+		local ok, iter, dir_obj = pcall(lfs.dir, path)
+		if ok then
+			for name in iter, dir_obj do
+				if name ~= "." and name ~= ".." and name ~= "res" then
+					local fullpath = path .. "/" .. name
+					local attr = lfs.attributes(fullpath)
+					if attr and attr.mode == "directory" then
+						scanDir(fullpath)
+					elseif attr and attr.mode == "file" and fullpath:match("%.ifo$") then
+						local f = io.open(fullpath, "r")
+						if f then
+							local content = f:read("*all")
+							f:close()
+							local dictname = content:match("\nbookname=(.-)\r?\n") or content:match("^bookname=(.-)\r?\n")
+							if dictname and not seen[dictname] then
+								table.insert(names, dictname)
+								seen[dictname] = true
+							end
+						end
+					end
+				end
+			end
+		end
+	end
+
+	scanDir(data_dir)
+	scanDir(data_dir .. "_ext")
+	table.sort(names)
+	return names
+end
+
+-- Runs an sdcv lookup restricted to `dictionary_list`, returning the first
+-- non-empty result. Compares dictionary names trimmed (not exact-string)
+-- since sdcv's own res.dict can differ slightly from the .ifo bookname
+-- shown in the settings menu; if nothing matches by name, falls back to the
+-- first real result anyway, since sdcv was already restricted to this list.
+function FloatingDictionary:lookupInDictionaryList(word, dictionary_list)
+	if not word or word == "" or type(dictionary_list) ~= "table" or #dictionary_list == 0 then
+		return nil
+	end
+
+	local dict_inst = self.ui and self.ui.dictionary
+	if not dict_inst or not dict_inst.startSdcv then
+		return nil
+	end
+
+	local saved_msg = dict_inst.lookup_progress_msg
+	dict_inst.lookup_progress_msg = nil
+
+	local ok, results = pcall(function()
+		return dict_inst:startSdcv(word, dictionary_list, false)
+	end)
+
+	dict_inst.lookup_progress_msg = saved_msg
+
+	if not ok or not results or type(results) ~= "table" or #results == 0 then
+		return nil
+	end
+
+	for _, wanted_dict in ipairs(dictionary_list) do
+		local wanted_trimmed = trim(wanted_dict)
+		for _, res in ipairs(results) do
+			local definition = tostring(res.definition or ""):match("^%s*(.-)%s*$")
+			if trim(res.dict or "") == wanted_trimmed and not res.no_result and definition ~= "" then
+				return res
+			end
+		end
+	end
+
+	for _, res in ipairs(results) do
+		local definition = tostring(res.definition or ""):match("^%s*(.-)%s*$")
+		if not res.no_result and definition ~= "" then
+			return res
+		end
+	end
+
+	return nil
+end
+
 -- Preview construction -------------------------------------------------------
 
 function FloatingDictionary:buildPreviewPayload(word, result, result_index, result_count)
 	result = result or {}
-
-	local shown_word = result.word or word or _("Dictionary")
-	local dict_name = result.dict or _("Dictionary")
-	local definition_html
-	local css
 
 	-- Match the popup's typeface to whatever font the currently open book
 	-- is using, instead of a fixed UI font (same approach as xray_ui.lua) —
@@ -2930,6 +3211,12 @@ function FloatingDictionary:buildPreviewPayload(word, result, result_index, resu
 	local button_face = getDocFontFace(self, UI_FONT_SIZE + font_size_delta)
 	local button_icon_size = Screen:scaleBySize(24 * button_scale)
 	local button_row_height = Screen:scaleBySize(46 * button_scale)
+
+
+	local shown_word = result.word or word or _("Dictionary")
+	local dict_name = result.dict or _("Dictionary")
+	local definition_html
+	local css
 
 	if result.no_result then
 		dict_name = _("Dictionary")
@@ -2980,15 +3267,33 @@ local function buildPreviewResults(results)
 		return preview_results
 	end
 
+	-- Split into "definition" and "translation-looking" dictionary results,
+	-- based on the dictionary's own name (classifyDictionaryName): even if
+	-- the user has a translation dictionary enabled as a regular KOReader
+	-- dictionary (mixed in with normal definition dictionaries), it gets
+	-- pushed to the end of the navigable pages instead of interleaved.
+	local definition_results = {}
+	local translation_results = {}
+
 	-- Ignore no-result placeholders when at least one dictionary has a real
 	-- definition. This keeps navigation focused only on usable dictionary hits.
 	for index, result in ipairs(results) do
 		if result and not result.no_result then
-			table.insert(preview_results, {
-				result = result,
-				source_index = index,
-			})
+			local entry = { result = result, source_index = index }
+			local is_translation_dict = classifyDictionaryName(result.dict)
+			if is_translation_dict then
+				table.insert(translation_results, entry)
+			else
+				table.insert(definition_results, entry)
+			end
 		end
+	end
+
+	for _, entry in ipairs(definition_results) do
+		table.insert(preview_results, entry)
+	end
+	for _, entry in ipairs(translation_results) do
+		table.insert(preview_results, entry)
 	end
 
 	-- When no dictionary matched, keep a single placeholder preview so the user
@@ -3078,9 +3383,9 @@ function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, d
 		return true
 	end
 
-	local cascade_on = self:isCascadeEnabled()
-	local is_cascade_step = cascade_on
-		and (link ~= nil or self.pending_cascade_step)
+	-- Cascading is always on: any follow-up lookup stacks on top of the
+	-- previous one instead of just replacing it.
+	local is_cascade_step = (link ~= nil or self.pending_cascade_step)
 		and #self.cascade_history > 0
 	self.pending_cascade_step = false
 
@@ -3215,10 +3520,9 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 		return true
 	end
 
-	-- Only from the 2nd step onward, and only while the toggle is on (it may
-	-- have been switched off mid-session).
+	-- Only from the 2nd step onward.
 	local breadcrumb_labels = nil
-	if self:isCascadeEnabled() and depth > 1 then
+	if depth > 1 then
 		breadcrumb_labels = {}
 		for _, cascade_frame in ipairs(self.cascade_history) do
 			table.insert(breadcrumb_labels, cascade_frame.word or "")
