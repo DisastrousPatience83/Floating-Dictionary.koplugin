@@ -1,40 +1,62 @@
-# Floating Dictionary (KOReader Plugin)
+# Floating Dictionary
 
-A compact, floating dictionary preview for KOReader. Instead of jumping straight into the full-screen dictionary popup every time you look up a word, **Floating Dictionary** shows a small, unobtrusive card near your selection with the definition—and lets you dig deeper only if you want to.
+A lightweight, highly customizable floating dictionary for KOReader.
+
+Instead of opening KOReader's full dictionary popup every time, Floating Dictionary displays a compact preview beside your selection, allowing you to continue reading without breaking your flow.
 
 ---
 
-# Why?
+## Why?
 
-KOReader's built-in dictionary lookup opens a large popup that takes over most of the screen. That's great when you actually want to read a long definition, but it's overkill for the common case: you just want a quick reminder of what a word means without losing your place or breaking your reading flow.
+KOReader's built-in dictionary is excellent for reading long entries, but most lookups only need a quick glance.
 
-Floating Dictionary adds a lightweight preview step in between:
+Floating Dictionary adds an intermediate step:
 
 - Tap a word.
-- Instantly get a compact floating definition.
-- Open the full dictionary only if you need more information.
+- Read a compact definition.
+- Continue reading.
+- Open the full dictionary only when needed.
 
 ---
 
 # Features
 
-## Compact floating preview
+## Floating preview
 
-Instead of opening the native dictionary window immediately, the plugin displays a small floating card containing:
-
-- Looked-up word
-- Dictionary name
-- Definition
-
-This keeps your reading uninterrupted.
+- Compact popup
+- Word, dictionary and definition
+- Doesn't interrupt reading
+- Tap outside to dismiss
 
 ---
 
-## Cascading lookups with breadcrumb trail
+## Multiple popup styles
 
-Looking up another word inside a definition opens another floating card on top of the current one.
+Choose the appearance you prefer.
 
-Example:
+### Classic
+
+The original Floating Dictionary design.
+
+### Kobo
+
+- Kobo-inspired layout
+- Compact toolbar
+- Cleaner typography
+- Rectangular popup
+
+---
+
+## Cascading lookups
+
+Follow links inside definitions without losing context.
+
+- Infinite lookup chain
+- Breadcrumb navigation
+- Automatic stack management
+- Back navigation with animations
+
+Example
 
 ```
 Book
@@ -46,217 +68,58 @@ Fur
 DNA
 ```
 
-A breadcrumb at the top lets you jump back instantly to any previous lookup.
-
-The stack has a configurable depth limit to prevent unlimited growth.
-
-This behavior is always enabled because it's considered a core feature of the plugin.
-
 ---
 
-## Automatic translation dictionary detection
+## Smarter dictionary ordering
 
-The plugin automatically:
+Floating Dictionary automatically improves dictionary results.
 
-- Detects the language of the selected word.
-- Identifies bilingual dictionaries from their names.
-- Pushes translation dictionaries to the end of the results.
+- Detects the language
+- Detects translation dictionaries
+- Prioritizes definition dictionaries
+- Fully offline
 
-Definition dictionaries therefore appear first without changing KOReader's own dictionary configuration.
-
----
-
-## Manual dictionary ordering
-
-Every installed dictionary can be manually reordered.
-
-The system works for every dictionary type:
-
-- Definitions
-- Translation
-- Synonyms
-- Antonyms
-- Pronunciation
-- Conjugations
-- Etymology
-- Examples
-- Thesaurus
-- Any future dictionary supported by KOReader
-
-Unconfigured dictionaries automatically fall back to the default ordering.
+You can also manually reorder every installed dictionary.
 
 ---
 
 ## Display modes
 
-Quick one-tap profile switching.
+Switch the interface instantly.
 
-### Personal
-
-Uses your saved configuration.
-
-(Default.)
-
-### Minimal
-
-Removes the footer entirely for the cleanest interface.
-
-### Full
-
-Shows every available dictionary, tool and action.
-
-### Language Learner
-
-- Translation dictionaries first
-- Definition dictionaries second
-- Wikipedia hidden
-- Full-text search hidden
-
-Changing modes never overwrites your Personal configuration.
+| Mode | Description |
+|------|-------------|
+| Personal | Uses your saved configuration |
+| Minimal | Footer hidden |
+| Full | Everything enabled |
+| Language Learner | Translation-first layout |
 
 ---
 
-## Page-turn style animations
+## Popup customization
 
-Floating cards animate like page turns.
+Personalize the entire popup.
 
-Opening:
-
-- Left → Right
-
-Closing:
-
-- Right → Left
-
-Returning through breadcrumbs also animates backwards.
-
-Animations can be disabled.
-
----
-
-## Uses the book's typography
-
-By default, Floating Dictionary automatically uses:
-
-1. Current book font
-2. Global CRE font
-3. Built-in fallback font
-
-A manually selected font always overrides this behavior.
-
----
-
-## Custom preview font
-
-The Font tab lets you choose any installed CRE font.
-
-Features:
-
-- Live preview
-- Pagination
-- Swipe navigation
-- Previous / Next buttons
-
----
-
-## Adjustable font size
-
-Dedicated buttons:
-
-- A−
-- A+
-
-The size is remembered between sessions.
-
-Footer icons scale together with the text.
-
----
-
-## Adjustable popup size
-
-Choose the popup height as a percentage of the screen.
-
-Ideal for:
-
-- Phones
-- Tablets
-- Large eReaders
-
----
-
-## Custom popup border
-
-Configure:
-
+- Font
+- Font size
+- Height
 - Border thickness
 - Border darkness
+- Classic or Kobo style
 
 ---
 
-## Multiple dictionary results
+## Footer customization
 
-Navigate through every matching dictionary using:
+Every button is individually configurable.
 
-- Previous button
-- Next button
-- Swipe gestures
-
-If only one dictionary exists, navigation buttons become disabled instead of disappearing.
-
----
-
-## Translate button
-
-Immediately sends the selected word or phrase to KOReader's built-in translator.
-
----
-
-## Quick actions
-
-Any footer action can be enabled or disabled.
-
-Available actions include:
-
-- Highlight
-- Full-text search
-- Wikipedia
-- Translate
-- Vocabulary Builder
-
----
-
-## External plugin buttons
-
-If another plugin adds buttons to KOReader's native dictionary popup, Floating Dictionary automatically detects and displays them.
-
----
-
-## Fully customizable footer
-
-Settings are divided into two tabs.
-
-### Buttons
-
-- Show / hide actions
-- Reorder buttons
-- Live updates
-
-### Font
-
-- Choose preview font
+- Show / hide
+- Reorder
+- Rename
+- Custom SVG icon
 - Live preview
 
----
-
-## Custom footer icons
-
-Every button can use:
-
-1. Custom SVG icon
-2. Custom text
-3. Single-letter fallback
-
-Place custom SVG files (40px x 40px) inside:
+Custom icons are loaded from
 
 ```
 floatingdictionary-images/
@@ -264,17 +127,52 @@ floatingdictionary-images/
 
 ---
 
-## Per-button visibility
+## Dictionary navigation
 
-Every footer button can be shown or hidden independently.
+When multiple dictionaries match:
 
-Settings are remembered permanently.
+- Swipe
+- Previous / Next buttons
+- Disabled navigation when unavailable
 
 ---
 
-## Embedded highlight styles
+## Quick actions
 
-Includes nine built-in highlight styles:
+Available actions include:
+
+- Highlight
+- Translate
+- Wikipedia
+- Full-text search
+- Vocabulary Builder
+
+Buttons added by other dictionary plugins are detected automatically.
+
+---
+
+## Highlight integration
+
+Floating Dictionary completely replaces KOReader's highlight menu.
+
+Configure:
+
+- Style
+- Color
+- Opacity
+- Line height
+- Note marker
+- PDF write-in
+
+Changes apply immediately.
+
+---
+
+## Built-in highlight styles
+
+16 styles included.
+
+**Fill**
 
 - Solid Medium
 - Solid Light
@@ -285,65 +183,49 @@ Includes nine built-in highlight styles:
 - Grid Thick
 - Outline Thick
 - Crosshatch
+- Wavy Fill
 
-Line thickness is configurable.
+**Underline**
 
-No external patch required.
+- Plain
+- Fine
+- Thick
+- Dash
+- Dotted
+- Wavy
 
----
-
-## Integrated highlight settings
-
-Floating Dictionary absorbs KOReader's own Highlight menu.
-
-Includes:
-
-- Style
-- Color
-- Opacity
-- Line height
-- Note marker
-- Apply to all
-- PDF write-in
-
-Applying a style now refreshes highlights immediately without requiring a page reload.
+Each style has configurable line thickness.
 
 ---
 
 ## Word Review
 
-A lightweight spaced-review system.
+Review previously searched words automatically.
 
-The plugin remembers words looked up for each book.
+Appears when:
 
-A random previous word appears automatically:
+- Opening a book
+- Waking the device
 
-- When opening a book
-- When waking the device
-
-History can be managed or cleared from the settings menu.
+History is stored separately for every book.
 
 ---
 
-## Fast Lookups (FastDict)
+## FastDict
 
 Optional in-process dictionary engine.
 
-Advantages:
-
 - Near-instant lookups
-- No external `sdcv` process
-- Automatic fallback to KOReader's normal lookup if necessary
-- Never breaks searches
-
-FastDict includes an index manager showing which dictionaries use FastDict and which continue using KOReader's standard engine.
+- No external `sdcv`
+- Automatic fallback
+- Built-in index manager
 
 ---
 
 # Installation
 
 1. Download or clone this repository.
-2. Copy the `floatingdictionary.koplugin` folder into:
+2. Copy `floatingdictionary.koplugin` into:
 
 ```
 plugins/
@@ -353,40 +235,20 @@ plugins/
 
 ---
 
-# Usage
-
-1. Tap or select a word.
-2. Floating Dictionary displays a compact preview.
-3. Select another word inside the definition to create another floating card.
-4. Use the breadcrumb to navigate previous lookups.
-5. Use footer buttons to:
-   - Switch dictionaries
-   - Highlight
-   - Search
-   - Translate
-   - Open Wikipedia
-   - Add to Vocabulary Builder
-6. Tap outside the popup to dismiss the entire lookup session.
-
----
-
 # Compatibility
 
-- Compatible with recent KOReader releases.
-- Uses KOReader's existing dictionary engine.
-- Works alongside other dictionary plugins.
-- Vocabulary Builder integration is optional.
-- Uses KOReader's built-in Translator.
-- Supports every CRE font installed on the device.
-- Built-in animations require no external patches.
-- Translation dictionary detection works completely offline.
-- Highlight styles are built into the plugin.
-- FastDict automatically falls back to KOReader's standard lookup whenever necessary.
+- Recent KOReader releases
+- Built-in Translator
+- Vocabulary Builder
+- Every CRE font
+- External dictionary plugins
+- Offline translation detection
+- No external patches required
 
 ---
 
 # License
 
-This project is distributed under the same license as the repository.
+Distributed under the same license as the repository.
 
-Contributions, bug reports, and feature requests are welcome.
+Contributions, bug reports and feature requests are always welcome.
