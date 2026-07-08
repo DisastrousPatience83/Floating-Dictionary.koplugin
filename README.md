@@ -2,20 +2,19 @@
 
 A lightweight, highly customizable floating dictionary for KOReader.
 
-Instead of opening KOReader's full dictionary popup every time, Floating Dictionary displays a compact preview beside your selection, allowing you to continue reading without breaking your flow.
+Instead of opening KOReader's full dictionary popup every time, **Floating Dictionary** displays a compact preview beside your selection, allowing you to continue reading without breaking your flow.
 
 ---
 
-## Why?
+# Why?
 
-KOReader's built-in dictionary is excellent for reading long entries, but most lookups only need a quick glance.
+KOReader's built-in dictionary is excellent for reading long entries, but most lookups only need a quick reminder.
 
 Floating Dictionary adds an intermediate step:
 
-- Tap a word.
-- Read a compact definition.
-- Continue reading.
-- Open the full dictionary only when needed.
+> **Tap a word → Read the definition → Continue reading**
+
+Open KOReader's full dictionary only when you actually need it.
 
 ---
 
@@ -34,31 +33,20 @@ Floating Dictionary adds an intermediate step:
 
 Choose the appearance you prefer.
 
-### Classic
-
-The original Floating Dictionary design.
-
-### Kobo
-
-- Kobo-inspired layout
-- Compact toolbar
-- Cleaner typography
-- Rectangular popup
+| Style | Description |
+|-------|-------------|
+| **Classic** | Original Floating Dictionary interface |
+| **Kobo** | Kobo-inspired layout with compact toolbar and cleaner typography |
 
 ---
 
 ## Cascading lookups
 
-Follow links inside definitions without losing context.
-
-- Infinite lookup chain
-- Breadcrumb navigation
-- Automatic stack management
-- Back navigation with animations
+Explore definitions naturally without losing context.
 
 Example
 
-```
+```text
 Book
  ↓
 Dog
@@ -68,18 +56,23 @@ Fur
 DNA
 ```
 
+| | |
+|---|---|
+| Breadcrumb navigation | Automatic stack limit |
+| Animated back navigation | Continue reading without closing popups |
+
 ---
 
 ## Smarter dictionary ordering
 
 Floating Dictionary automatically improves dictionary results.
 
-- Detects the language
-- Detects translation dictionaries
-- Prioritizes definition dictionaries
-- Fully offline
-
-You can also manually reorder every installed dictionary.
+| Automatic | Manual |
+|-----------|--------|
+| Detects word language | Reorder every installed dictionary |
+| Detects translation dictionaries | Works with every dictionary type |
+| Definition dictionaries first | Unconfigured dictionaries keep KOReader's order |
+| Fully offline | Future dictionary types supported |
 
 ---
 
@@ -87,41 +80,43 @@ You can also manually reorder every installed dictionary.
 
 Switch the interface instantly.
 
-| Mode | Description |
-|------|-------------|
-| Personal | Uses your saved configuration |
-| Minimal | Footer hidden |
-| Full | Everything enabled |
-| Language Learner | Translation-first layout |
+| Mode | Purpose |
+|------|---------|
+| **Personal** | Uses your saved configuration |
+| **Minimal** | Hides the footer |
+| **Full** | Shows every available feature |
+| **Language Learner** | Translation-first layout |
+
+Changing modes never overwrites your Personal configuration.
 
 ---
 
 ## Popup customization
 
-Personalize the entire popup.
+Personalize the popup to match your device.
 
-- Font
-- Font size
-- Height
-- Border thickness
-- Border darkness
-- Classic or Kobo style
+| | |
+|---|---|
+| Font | Popup height |
+| Font size | Border thickness |
+| Border darkness | Popup style |
+| Automatic book font | Custom CRE font |
 
 ---
 
 ## Footer customization
 
-Every button is individually configurable.
+Every button can be configured independently.
 
-- Show / hide
-- Reorder
-- Rename
-- Custom SVG icon
-- Live preview
+| | |
+|---|---|
+| Show / Hide | Reorder |
+| Rename | Custom SVG icon |
+| Live preview | Per-button settings |
 
-Custom icons are loaded from
+Custom SVG icons are loaded from:
 
-```
+```text
 floatingdictionary-images/
 ```
 
@@ -129,23 +124,22 @@ floatingdictionary-images/
 
 ## Dictionary navigation
 
-When multiple dictionaries match:
+When multiple dictionaries contain a result:
 
-- Swipe
-- Previous / Next buttons
-- Disabled navigation when unavailable
+| | |
+|---|---|
+| Previous / Next buttons | Swipe gestures |
+| Disabled navigation when unavailable | Live dictionary counter |
 
 ---
 
 ## Quick actions
 
-Available actions include:
-
-- Highlight
-- Translate
-- Wikipedia
-- Full-text search
-- Vocabulary Builder
+| | |
+|---|---|
+| ✓ Highlight | ✓ Translate |
+| ✓ Wikipedia | ✓ Full-text search |
+| ✓ Vocabulary Builder | ✓ External plugin buttons |
 
 Buttons added by other dictionary plugins are detected automatically.
 
@@ -153,61 +147,55 @@ Buttons added by other dictionary plugins are detected automatically.
 
 ## Highlight integration
 
-Floating Dictionary completely replaces KOReader's highlight menu.
+Floating Dictionary completely integrates KOReader's highlight settings.
 
-Configure:
+| | |
+|---|---|
+| Style | Color |
+| Opacity | Line height |
+| Note marker | Apply to all |
+| PDF write-in | Instant refresh |
 
-- Style
-- Color
-- Opacity
-- Line height
-- Note marker
-- PDF write-in
-
-Changes apply immediately.
+No page reload is required.
 
 ---
 
 ## Built-in highlight styles
 
-16 styles included.
+### Fill styles
 
-**Fill**
+| | |
+|---|---|
+| Solid Medium | Grid Thin |
+| Solid Light | Grid Thick |
+| Dotted | Outline Thick |
+| Diagonal Thin | Crosshatch |
+| Diagonal Thick | Wavy Fill |
 
-- Solid Medium
-- Solid Light
-- Dotted
-- Diagonal Thin
-- Diagonal Thick
-- Grid Thin
-- Grid Thick
-- Outline Thick
-- Crosshatch
-- Wavy Fill
+### Underline styles
 
-**Underline**
+| | |
+|---|---|
+| Plain | Thick |
+| Fine | Dash |
+| Dotted | Wavy |
 
-- Plain
-- Fine
-- Thick
-- Dash
-- Dotted
-- Wavy
-
-Each style has configurable line thickness.
+Every style supports configurable line thickness.
 
 ---
 
 ## Word Review
 
-Review previously searched words automatically.
+A lightweight spaced-review system.
 
-Appears when:
+Automatically displays previously searched words:
 
-- Opening a book
-- Waking the device
+| | |
+|---|---|
+| When opening a book | When waking the device |
+| Per-book history | Easy history management |
 
-History is stored separately for every book.
+Floating Dictionary automatically remembers the resolved dictionary entry whenever possible, improving future reviews.
 
 ---
 
@@ -215,19 +203,28 @@ History is stored separately for every book.
 
 Optional in-process dictionary engine.
 
-- Near-instant lookups
-- No external `sdcv`
-- Automatic fallback
-- Built-in index manager
+| | |
+|---|---|
+| Near-instant lookups | No external `sdcv` process |
+| Automatic fallback | Never breaks searches |
+| Lower latency | Built-in index manager |
+
+The index manager shows which dictionaries use FastDict and which continue using KOReader's standard engine.
 
 ---
 
 # Installation
 
 1. Download or clone this repository.
-2. Copy `floatingdictionary.koplugin` into:
+2. Copy:
 
+```text
+floatingdictionary.koplugin
 ```
+
+into:
+
+```text
 plugins/
 ```
 
@@ -235,20 +232,32 @@ plugins/
 
 ---
 
+# Usage
+
+1. Tap or select a word.
+2. Floating Dictionary displays a compact preview.
+3. Tap another word inside the definition to continue exploring.
+4. Navigate previous lookups using the breadcrumb.
+5. Browse dictionaries with swipe gestures or navigation buttons.
+6. Use the footer to highlight, translate, search, open Wikipedia or access external plugin actions.
+7. Tap outside the popup to close the lookup session.
+
+---
+
 # Compatibility
 
-- Recent KOReader releases
-- Built-in Translator
-- Vocabulary Builder
-- Every CRE font
-- External dictionary plugins
-- Offline translation detection
-- No external patches required
+| | |
+|---|---|
+| ✓ Recent KOReader releases | ✓ Built-in Translator |
+| ✓ Vocabulary Builder | ✓ Every CRE font |
+| ✓ External dictionary plugins | ✓ Offline translation detection |
+| ✓ Built-in page-turn animations | ✓ Built-in highlight styles |
+| ✓ FastDict fallback | ✓ No external patches required |
 
 ---
 
 # License
 
-Distributed under the same license as the repository.
+Distributed under the same license as this repository.
 
 Contributions, bug reports and feature requests are always welcome.
