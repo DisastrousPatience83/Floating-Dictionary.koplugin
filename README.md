@@ -256,7 +256,7 @@ Every button can use:
 2. Custom text
 3. Single-letter fallback
 
-Place custom SVG files inside:
+Place custom SVG files (40px x 40px) inside:
 
 ```
 floatingdictionary-images/
