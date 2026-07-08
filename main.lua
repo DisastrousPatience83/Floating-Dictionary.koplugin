@@ -674,10 +674,10 @@ local KOREADER_ICON_SIZE = Screen:scaleBySize(24)
 local BUTTON_HEIGHT = Screen:scaleBySize(12)
 local BUTTON_SEPARATOR_WIDTH = math.max(1, Screen:scaleBySize(1))
 
--- Card look: the panel floats slightly above the bottom edge and is inset
--- from the sides so its rounded corners are actually visible.
-local CARD_OUTER_SIDE_MARGIN = Screen:scaleBySize(10)
-local CARD_OUTER_BOTTOM_MARGIN = Screen:scaleBySize(10)
+-- CARD_RADIUS is still used directly by FloatingDictionaryButtonSettingsPopup
+-- (the footer button reorder/show-hide dialog), which is a separate KOReader
+-- settings-style surface, not part of the dictionary card itself, so it
+-- intentionally stays fixed regardless of which popup style is active.
 local CARD_RADIUS = Screen:scaleBySize(14)
 
 -- Popup border thickness/darkness: user-configurable from the settings menu
@@ -696,20 +696,11 @@ local POPUP_BORDER_DARKNESS_MIN = 0.0
 local POPUP_BORDER_DARKNESS_MAX = 1.0
 local POPUP_BORDER_DARKNESS_STEP = 0.1
 
-local PANEL_PADDING_TOP = Screen:scaleBySize(10)
-local PANEL_PADDING_BOTTOM = Screen:scaleBySize(6)
-local TEXT_BUTTON_GAP = Screen:scaleBySize(6)
-local BUTTON_ROW_SEPARATOR_WIDTH = math.max(1, Screen:scaleBySize(1.5)) -- thicker/darker than the thin breadcrumb divider, so the button bar reads as a distinct footer, per reference image
-local BUTTON_ROW_SEPARATOR_GAP = 0 -- no gap: vertical button separators must join flush with this line, forming one continuous divider
-local CONTENT_PADDING_LEFT = Screen:scaleBySize(18)
-local CONTENT_PADDING_RIGHT = Screen:scaleBySize(14)
-
 -- Cascade breadcrumb: a thin strip glued to the top of the card, above the
 -- word/definition area, showing the trail of lookups that led to the one
 -- currently shown (e.g. "... -> Patas -> Pelo -> ADN -> Vivo -> Hidrocarburo").
-local BREADCRUMB_FONT_SIZE = 15
-local BREADCRUMB_GAP = Screen:scaleBySize(4) -- space between breadcrumb strip and separator below it
-local BREADCRUMB_BOTTOM_MARGIN = Screen:scaleBySize(4)
+-- Its font size/spacing are now per-style (see POPUP_STYLE_LAYOUT); only the
+-- arrow/ellipsis glyphs themselves (not style-dependent) stay fixed here.
 local BREADCRUMB_ARROW_TEXT = " \xE2\x86\x92 " -- " -> " (U+2192 RIGHTWARDS ARROW)
 local BREADCRUMB_ELLIPSIS_TEXT = "..."
 -- Hard cap on how many cards a cascade session keeps stacked at once. Once a
@@ -756,7 +747,11 @@ local CUSTOM_ICONS_DIR_NAME = "floatingdictionary-images"
 -- sortResultsByDictionaryOrder below.
 local SETTING_DICTIONARY_ORDER = "floatingdictionary_dictionary_order"
 local SETTING_SHOW_EXTERNAL_BUTTONS = "floatingdictionary_show_external_buttons"
-local SETTING_FONT_SIZE_DELTA = "floatingdictionary_font_size_delta"
+-- Popup text size (an absolute point size from the fixed POPUP_FONT_SIZES
+-- list), user-configurable from the settings menu with the same
+-- SpinWidget-based picker "Popup border thickness" uses. Replaces the old
+-- A+/A- footer buttons, which adjusted a delta off UI_FONT_SIZE instead.
+local SETTING_POPUP_FONT_SIZE = "floatingdictionary_popup_font_size"
 -- Card height as a fraction of the screen height, user-configurable from the
 -- KOReader settings menu so small screens (e.g. 6") and large ones (10"+)
 -- can each pick a card size that fits them well. Replaces the old fixed
@@ -822,12 +817,180 @@ local DISPLAY_MODES = {
 -- this can only ever speed lookups up, never break them.
 local SETTING_FASTDICT_ENABLED = "floatingdictionary_fastdict_enabled"
 
--- How much A+/A- changes the popup's text size by, and how far it can go
--- in either direction relative to UI_FONT_SIZE. Does not affect the footer
--- buttons, which always use UI_FONT_SIZE.
-local FONT_SIZE_STEP = 2
-local FONT_SIZE_DELTA_MIN = -6
-local FONT_SIZE_DELTA_MAX = 16
+-- =============================================================================
+-- Popup style (presentation layer) -------------------------------------------
+--
+-- Everything above/below this block (cascade logic, button actions,
+-- dictionary ordering, display modes, FastDict, word review, ...) is pure
+-- plugin *logic* and stays completely style-agnostic: it never changes based
+-- on which popup style is active. Only two things vary per style, both
+-- consulted at render time by FloatingDictionaryPopup/getBaseCss/
+-- getDictionaryPanelCss:
+--
+--   1. LAYOUT  -- native-widget geometry constants (paddings, separator
+--      thickness, card radius, breadcrumb treatment, ...), read via
+--      getPopupStyleLayout() instead of the old fixed module-level
+--      constants.
+--   2. CSS     -- the .floatingdictionary-word/-meta/-separator rules
+--      injected into the (already-existing) HTML header block, read via
+--      getPopupStyleHeaderCss().
+--
+-- Every current and future popup feature (custom icons/SVGs, letter
+-- fallback, button rename/reorder/show-hide, font size, display modes, card
+-- height, border thickness/darkness, breadcrumb cascade, font family
+-- override, ...) is implemented exactly once, upstream of this block, and
+-- automatically works under any style: styles only ever change how the same
+-- data is drawn, never what data is shown or how it behaves.
+--
+-- Adding a future 3rd/4th style means adding one more entry to
+-- POPUP_STYLE_LAYOUT (a layout table) plus a branch in
+-- getPopupStyleHeaderCss, and one line in POPUP_STYLES -- no other code
+-- anywhere in the plugin needs to change.
+-- =============================================================================
+
+local SETTING_POPUP_STYLE = "floatingdictionary_popup_style"
+local POPUP_STYLE_CLASSIC = "classic"
+local POPUP_STYLE_KOBO = "kobo"
+local POPUP_STYLE_DEFAULT = POPUP_STYLE_CLASSIC
+
+-- Order here is also the order styles are listed in the settings menu.
+local POPUP_STYLES = {
+	{ id = POPUP_STYLE_CLASSIC, text = _("Classic") },
+	{ id = POPUP_STYLE_KOBO, text = _("Kobo") },
+}
+
+-- Per-style native-widget layout constants. "classic" reproduces the
+-- previous fixed module-level constants exactly (same numbers, just moved
+-- into this table), so existing users see zero visual change unless they
+-- explicitly switch to Kobo.
+local POPUP_STYLE_LAYOUT = {
+	[POPUP_STYLE_CLASSIC] = {
+		panel_padding_top = Screen:scaleBySize(10),
+		panel_padding_bottom = Screen:scaleBySize(6),
+		text_button_gap = Screen:scaleBySize(6),
+		button_row_separator_width = math.max(1, Screen:scaleBySize(1.5)),
+		button_row_separator_gap = 0,
+		content_padding_left = Screen:scaleBySize(18),
+		content_padding_right = Screen:scaleBySize(14),
+		card_outer_side_margin = Screen:scaleBySize(10),
+		card_outer_bottom_margin = Screen:scaleBySize(10),
+		card_radius = Screen:scaleBySize(14),
+		breadcrumb_font_size = 15,
+		breadcrumb_gap = Screen:scaleBySize(4),
+		breadcrumb_bottom_margin = Screen:scaleBySize(4),
+		breadcrumb_separator_color = Blitbuffer.COLOR_GRAY,
+		body_separator_color = Blitbuffer.COLOR_GRAY,
+		-- Classic footer: buttons stretch to justify/fill the whole row
+		-- width, exactly as before.
+		button_layout_mode = "justify",
+	},
+	[POPUP_STYLE_KOBO] = {
+		-- Kobo's reference layout: tight/flush margins, a hairline rule
+		-- directly under the headword block, a fully square (radius 0) card,
+		-- and a rule sitting flush against the icon toolbar so the vertical
+		-- button separators visually continue it (same "flush divider"
+		-- technique the classic style already uses, just with Kobo's own
+		-- metrics).
+		panel_padding_top = Screen:scaleBySize(8),
+		panel_padding_bottom = Screen:scaleBySize(2),
+		text_button_gap = Screen:scaleBySize(8),
+		button_row_separator_width = math.max(1, Screen:scaleBySize(1)),
+		button_row_separator_gap = 0,
+		content_padding_left = Screen:scaleBySize(20),
+		content_padding_right = Screen:scaleBySize(18),
+		card_outer_side_margin = Screen:scaleBySize(6),
+		card_outer_bottom_margin = Screen:scaleBySize(6),
+		-- Fully rectangular card: no rounded corners at all.
+		card_radius = 0,
+		breadcrumb_font_size = 14,
+		breadcrumb_gap = Screen:scaleBySize(6),
+		breadcrumb_bottom_margin = Screen:scaleBySize(2),
+		breadcrumb_separator_color = Blitbuffer.COLOR_LIGHT_GRAY,
+		body_separator_color = Blitbuffer.COLOR_LIGHT_GRAY,
+		-- Kobo's reference footer: small, natural-sized icon buttons packed
+		-- together and left-aligned, with empty space left over on the
+		-- right, instead of stretching to fill the row (see
+		-- button_layout_mode == "compact_left" in makeButtons).
+		button_layout_mode = "compact_left",
+		-- Kobo's buttons read noticeably smaller/tighter than Classic's.
+		button_height_scale = 0.72,
+		button_icon_scale = 0.8,
+		-- Horizontal gap between compact buttons (Classic instead uses a
+		-- full-height hairline separator between every button; Kobo has no
+		-- separators at all in the reference image, just even spacing).
+		button_compact_gap = Screen:scaleBySize(14),
+	},
+}
+
+local function getPopupStyleLayout(style_id)
+	return POPUP_STYLE_LAYOUT[style_id] or POPUP_STYLE_LAYOUT[POPUP_STYLE_DEFAULT]
+end
+
+-- Per-style CSS for the header block (.floatingdictionary-word/-meta/
+-- -separator) that buildPreviewPayload already generates as HTML -- this is
+-- the *only* place the popup's word/dictionary-name/definition typography
+-- differs between styles; the surrounding HTML/data pipeline is identical.
+local function getPopupStyleHeaderCss(style_id)
+	if style_id == POPUP_STYLE_KOBO then
+		return [[
+.floatingdictionary-word {
+    font-size: 1.55em;
+    font-weight: bold;
+    line-height: 1.2;
+    font-style: italic;
+}
+.floatingdictionary-word-counter {
+    font-size: 0.6em;
+    font-weight: normal;
+    font-style: normal;
+    color: #666;
+    margin-left: 0.2em;
+}
+.floatingdictionary-separator {
+    border-top: 1px solid #bbb;
+    margin: 0.15em 0 0.5em 0;
+}
+.floatingdictionary-meta {
+    margin-top: 0.9em;
+    font-size: 0.68em;
+    color: black;
+    font-style: italic;
+    letter-spacing: 0.01em;
+}
+]]
+	end
+
+	-- Classic (default): identical to the CSS previously hardcoded directly
+	-- inside getBaseCss/getDictionaryPanelCss.
+	return [[
+.floatingdictionary-word {
+    font-size: 1.18em;
+    font-weight: bold;
+    line-height: 1.15;
+}
+.floatingdictionary-meta {
+    margin-top: 0.08em;
+    font-size: 0.78em;
+    color: black;
+    font-style: italic;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+.floatingdictionary-separator {
+    border-top: 1px solid #ddd;
+    margin: 0.35em 0 0.4em 0;
+}
+]]
+end
+
+-- Popup text size: a fixed, user-chosen point size (not a delta off
+-- UI_FONT_SIZE). Selectable from the settings menu (see
+-- showPopupFontSizeDialog), same SpinWidget-based picker used for "Popup
+-- border thickness", but stepping through this fixed list of predefined
+-- sizes rather than a continuous range. Footer buttons keep scaling
+-- proportionally to whatever size is chosen, same as before.
+local POPUP_FONT_SIZES = { 12, 16, 20, 22, 24, 26, 28, 30, 34, 38, 44 }
+local POPUP_FONT_SIZE_DEFAULT = UI_FONT_SIZE
 
 local ACTION_HIGHLIGHT = "highlight"
 local ACTION_SEARCH_BOOK = "search_book"
@@ -837,8 +1000,6 @@ local ACTION_TRANSLATE = "translate"
 local ACTION_NAV_PREV = "nav_prev"
 local ACTION_NAV_NEXT = "nav_next"
 local ACTION_EXTERNAL = "external_plugins"
-local ACTION_FONT_DECREASE = "font_decrease"
-local ACTION_FONT_INCREASE = "font_increase"
 
 -- Order here is also the default order buttons are drawn in the footer
 -- (the user can reorder and hide them from the gear-icon settings popup).
@@ -853,8 +1014,6 @@ local ACTIONS = {
 	{ id = ACTION_VOCABULARY, label = _("Add to vocabulary builder"), short_label = _("+Vocab") },
 	{ id = ACTION_TRANSLATE, label = _("Translate"), short_label = _("Translate") },
 	{ id = ACTION_EXTERNAL, label = _("Buttons from other plugins"), short_label = "+", kind = "external" },
-	{ id = ACTION_FONT_DECREASE, label = _("Decrease font size"), short_label = "A-", kind = "font_decrease" },
-	{ id = ACTION_FONT_INCREASE, label = _("Increase font size"), short_label = "A+", kind = "font_increase" },
 	{ id = ACTION_NAV_NEXT, label = _("Next result"), short_label = _("Next"), kind = "nav_next" },
 }
 
@@ -1193,7 +1352,7 @@ local function resolveCssFont(font_family)
 	return "", font_family or UI_FONT_FACE
 end
 
-local function getBaseCss(font_family)
+local function getBaseCss(font_family, style_id)
 	local face_css, face = resolveCssFont(font_family)
 	return face_css .. [[
 @page {
@@ -1215,33 +1374,16 @@ ul, ol {
 a {
     color: black;
 }
-.floatingdictionary-word {
-    font-size: 1.18em;
-    font-weight: bold;
-    line-height: 1.15;
-}
-.floatingdictionary-meta {
-    margin-top: 0.08em;
-    font-size: 0.78em;
-    color: black;
-    font-style: italic;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-}
-.floatingdictionary-separator {
-    border-top: 1px solid #ddd;
-    margin: 0.35em 0 0.4em 0;
-}
-]]
+]] .. getPopupStyleHeaderCss(style_id)
 end
 
-local FALLBACK_CSS = getBaseCss()
+local FALLBACK_CSS = getBaseCss(nil, POPUP_STYLE_DEFAULT)
 
 local function hasDictionaryCss(result)
 	return result and result.css and result.css ~= "" and looksLikeHtml(result.definition)
 end
 
-local function getDictionaryPanelCss(result, font_family)
+local function getDictionaryPanelCss(result, font_family, style_id)
 	local css_justify = G_reader_settings:nilOrTrue("dict_justify") and "text-align: justify;" or ""
 	local face_css, face = resolveCssFont(font_family)
 
@@ -1267,24 +1409,7 @@ ol, ul, menu {
 a {
     color: black;
 }
-.floatingdictionary-word {
-    font-size: 1.18em;
-    font-weight: bold;
-    line-height: 1.15;
-}
-.floatingdictionary-meta {
-    margin-top: 0.08em;
-    font-size: 0.78em;
-    color: black;
-    font-style: italic;
-    letter-spacing: 0.02em;
-    text-transform: uppercase;
-}
-.floatingdictionary-separator {
-    border-top: 1px solid #ddd;
-    margin: 0.35em 0 0.4em 0;
-}
-]]
+]] .. getPopupStyleHeaderCss(style_id)
 
 	if result and result.css and result.css ~= "" then
 		css = css .. "\n" .. result.css
@@ -1307,6 +1432,11 @@ local PreviewButton = InputContainer:extend({
 	face = nil, -- optional Font face for the text fallback label; defaults to cfont
 	disabled = false, -- greys the icon out and makes the tap a no-op
 	width = nil,
+	-- When true (and width is nil), the button sizes itself to its actual
+	-- icon/label size plus padding instead of falling back to the fixed
+	-- 80px slot width below. Used by the Kobo footer's compact, naturally-
+	-- sized, left-packed buttons.
+	auto_width = false,
 	height = Screen:scaleBySize(48),
 	icon_width = KOREADER_ICON_SIZE,
 	icon_height = KOREADER_ICON_SIZE,
@@ -1322,9 +1452,13 @@ function PreviewButton:init()
 	local bordersize = 0
 	local padding_h = Size.padding.button
 	local padding_v = Size.padding.button
-	local outer_w = self.width or Screen:scaleBySize(80)
+	local auto_width = self.width == nil and self.auto_width
+	local outer_w = self.width or (auto_width and nil) or Screen:scaleBySize(80)
 	local outer_h = self.height or Screen:scaleBySize(48)
-	local inner_w = math.max(1, outer_w - 2 * bordersize - 2 * padding_h)
+	-- With an explicit/fallback width, size the label to fit inside it as
+	-- before. With auto_width, there's no outer_w yet -- the label's own
+	-- natural size *is* inner_w, computed just below once the label exists.
+	local inner_w = outer_w and math.max(1, outer_w - 2 * bordersize - 2 * padding_h) or nil
 	local inner_h = math.max(1, outer_h - 2 * bordersize - 2 * padding_v)
 	local label
 	local is_text_label = not self.icon_file and not self.icon
@@ -1356,6 +1490,14 @@ function PreviewButton:init()
 			max_width = inner_w,
 			fgcolor = self.disabled and Blitbuffer.COLOR_LIGHT_GRAY or nil,
 		})
+	end
+
+	if auto_width then
+		-- Natural size: whatever the icon/text label actually measures at,
+		-- no stretching to a fixed slot width.
+		local label_size = label:getSize()
+		inner_w = math.max(1, (label_size and label_size.w or 0))
+		outer_w = inner_w + 2 * bordersize + 2 * padding_h
 	end
 
 	self.label_widget = label
@@ -1492,6 +1634,12 @@ local FloatingDictionaryPopup = InputContainer:extend({
 	custom_title = nil, -- string; when set, replaces the breadcrumb strip with a
 	                    -- plain left-aligned title (used by the word-review
 	                    -- popup instead of the cascade breadcrumb/navigation).
+	style_id = nil, -- popup presentation style id (POPUP_STYLE_CLASSIC/
+	                -- POPUP_STYLE_KOBO/...), as chosen by the user in the
+	                -- settings menu; falls back to POPUP_STYLE_DEFAULT. Only
+	                -- ever affects layout constants and header CSS (see
+	                -- getPopupStyleLayout/getPopupStyleHeaderCss) -- never
+	                -- plugin logic or data.
 })
 
 function FloatingDictionaryPopup:init()
@@ -1509,14 +1657,23 @@ function FloatingDictionaryPopup:init()
 	-- this at the source, for every construction site, current and future.
 	self.dialog = self.dialog or self
 
+	-- Resolve this popup's presentation style once, up front: every layout
+	-- constant below reads from this table instead of a fixed module-level
+	-- constant, so switching styles never requires touching any of the
+	-- logic that follows (dynamic height math, cascade breadcrumb, button
+	-- row construction, ...). See the "Popup style" block near the top of
+	-- this file for what each style actually configures.
+	local layout = getPopupStyleLayout(self.style_id)
+	self._layout = layout
+
 	local screen_width = Screen:getWidth()
 	local screen_height = Screen:getHeight()
 
 	-- All cascade cards now share the exact same position and size (no
 	-- per-depth inset/peek-behind effect); a new card fully replaces the
 	-- previous one visually instead of nesting inside it.
-	local side_margin = CARD_OUTER_SIDE_MARGIN
-	local edge_margin = CARD_OUTER_BOTTOM_MARGIN
+	local side_margin = layout.card_outer_side_margin
+	local edge_margin = layout.card_outer_bottom_margin
 
 	-- Inset the card from the screen edges so the rounded corners read as a
 	-- floating card rather than a full-bleed bar.
@@ -1543,7 +1700,7 @@ function FloatingDictionaryPopup:init()
 		}
 	end
 
-	local content_width = math.max(MIN_CONTENT_WIDTH, self.width - CONTENT_PADDING_LEFT - CONTENT_PADDING_RIGHT)
+	local content_width = math.max(MIN_CONTENT_WIDTH, self.width - layout.content_padding_left - layout.content_padding_right)
 	local buttons_full_width = math.max(1, self.width - 2 * (self.border_thickness or POPUP_BORDER_THICKNESS_DEFAULT))
 	local buttons = self:makeButtons(buttons_full_width)
 	local buttons_height = self:getWidgetHeight(buttons, self.button_row_height or BUTTON_HEIGHT)
@@ -1560,34 +1717,34 @@ function FloatingDictionaryPopup:init()
 	local breadcrumb = not self.custom_title and self:makeBreadcrumb(content_width) or nil
 	local title_widget = self.custom_title and TextWidget:new({
 		text = self.custom_title,
-		face = Font:getFace("cfont", BREADCRUMB_FONT_SIZE),
+		face = Font:getFace("cfont", layout.breadcrumb_font_size),
 		bold = true,
 	}) or nil
 	local breadcrumb_rows = {}
 	local breadcrumb_extra_height = 0
 	if breadcrumb or title_widget then
 		local top_widget = breadcrumb or title_widget
-		local top_height = self:getWidgetHeight(top_widget, Screen:scaleBySize(BREADCRUMB_FONT_SIZE + 6))
+		local top_height = self:getWidgetHeight(top_widget, Screen:scaleBySize(layout.breadcrumb_font_size + 6))
 		table.insert(breadcrumb_rows, HorizontalGroup:new({
-			HorizontalSpan:new({ width = CONTENT_PADDING_LEFT }),
+			HorizontalSpan:new({ width = layout.content_padding_left }),
 			top_widget,
-			HorizontalSpan:new({ width = CONTENT_PADDING_RIGHT }),
+			HorizontalSpan:new({ width = layout.content_padding_right }),
 		}))
-		table.insert(breadcrumb_rows, VerticalSpan:new({ width = BREADCRUMB_GAP }))
+		table.insert(breadcrumb_rows, VerticalSpan:new({ width = layout.breadcrumb_gap }))
 		table.insert(breadcrumb_rows, LineWidget:new({
-			background = Blitbuffer.COLOR_GRAY,
-			dimen = Geom:new({ w = self.width - 2 * (self.border_thickness or POPUP_BORDER_THICKNESS_DEFAULT), h = BUTTON_ROW_SEPARATOR_WIDTH }),
+			background = layout.breadcrumb_separator_color,
+			dimen = Geom:new({ w = self.width - 2 * (self.border_thickness or POPUP_BORDER_THICKNESS_DEFAULT), h = layout.button_row_separator_width }),
 		}))
-		table.insert(breadcrumb_rows, VerticalSpan:new({ width = BREADCRUMB_BOTTOM_MARGIN }))
-		breadcrumb_extra_height = top_height + BREADCRUMB_GAP + BUTTON_ROW_SEPARATOR_WIDTH + BREADCRUMB_BOTTOM_MARGIN
+		table.insert(breadcrumb_rows, VerticalSpan:new({ width = layout.breadcrumb_bottom_margin }))
+		breadcrumb_extra_height = top_height + layout.breadcrumb_gap + layout.button_row_separator_width + layout.breadcrumb_bottom_margin
 	end
 
 	local border_thickness = self.border_thickness or POPUP_BORDER_THICKNESS_DEFAULT
 	local border_color = self.border_color or Blitbuffer.Color8(math.floor((1 - POPUP_BORDER_DARKNESS_DEFAULT) * 255 + 0.5))
 
-	local fixed_height = PANEL_PADDING_TOP + breadcrumb_extra_height + TEXT_BUTTON_GAP
-		+ BUTTON_ROW_SEPARATOR_WIDTH + BUTTON_ROW_SEPARATOR_GAP + buttons_height
-		+ PANEL_PADDING_BOTTOM + 2 * border_thickness
+	local fixed_height = layout.panel_padding_top + breadcrumb_extra_height + layout.text_button_gap
+		+ layout.button_row_separator_width + layout.button_row_separator_gap + buttons_height
+		+ layout.panel_padding_bottom + 2 * border_thickness
 	local min_html_height = Screen:scaleBySize(40)
 	local max_html_height = math.max(max_popup_height - fixed_height, min_html_height)
 
@@ -1621,29 +1778,29 @@ function FloatingDictionaryPopup:init()
 	self.height = fixed_height + html_height
 
 	local body_rows = {}
-	table.insert(body_rows, VerticalSpan:new({ width = PANEL_PADDING_TOP }))
+	table.insert(body_rows, VerticalSpan:new({ width = layout.panel_padding_top }))
 	for _, row in ipairs(breadcrumb_rows) do
 		table.insert(body_rows, row)
 	end
 	table.insert(body_rows, HorizontalGroup:new({
-		HorizontalSpan:new({ width = CONTENT_PADDING_LEFT }),
+		HorizontalSpan:new({ width = layout.content_padding_left }),
 		self.htmlwidget,
-		HorizontalSpan:new({ width = CONTENT_PADDING_RIGHT }),
+		HorizontalSpan:new({ width = layout.content_padding_right }),
 	}))
-	table.insert(body_rows, VerticalSpan:new({ width = TEXT_BUTTON_GAP }))
+	table.insert(body_rows, VerticalSpan:new({ width = layout.text_button_gap }))
 	table.insert(body_rows, LineWidget:new({
-		background = Blitbuffer.COLOR_GRAY,
-		dimen = Geom:new({ w = self.width - 2 * border_thickness, h = BUTTON_ROW_SEPARATOR_WIDTH }),
+		background = layout.body_separator_color,
+		dimen = Geom:new({ w = self.width - 2 * border_thickness, h = layout.button_row_separator_width }),
 	}))
-	table.insert(body_rows, VerticalSpan:new({ width = BUTTON_ROW_SEPARATOR_GAP }))
+	table.insert(body_rows, VerticalSpan:new({ width = layout.button_row_separator_gap }))
 	table.insert(body_rows, buttons)
-	table.insert(body_rows, VerticalSpan:new({ width = PANEL_PADDING_BOTTOM }))
+	table.insert(body_rows, VerticalSpan:new({ width = layout.panel_padding_bottom }))
 
 	self.container = FrameContainer:new({
 		background = Blitbuffer.COLOR_WHITE,
 		bordersize = border_thickness,
 		color = border_color,
-		radius = CARD_RADIUS,
+		radius = layout.card_radius,
 		margin = 0,
 		padding = 0,
 		VerticalGroup:new(body_rows),
@@ -1695,7 +1852,8 @@ function FloatingDictionaryPopup:makeBreadcrumb(width)
 		return nil
 	end
 
-	local face = Font:getFace("cfont", BREADCRUMB_FONT_SIZE)
+	local layout = self._layout or getPopupStyleLayout(self.style_id)
+	local face = Font:getFace("cfont", layout.breadcrumb_font_size)
 	local count = #labels
 
 	local function measure(text, bold)
@@ -1767,9 +1925,11 @@ function FloatingDictionaryPopup:makeBreadcrumb(width)
 end
 
 function FloatingDictionaryPopup:makeButtons(width)
+	local layout = self._layout or getPopupStyleLayout(self.style_id)
 	local button_height = self.button_row_height or BUTTON_HEIGHT
 	local icon_size = self.button_icon_size or KOREADER_ICON_SIZE
-	local separator_width = BUTTON_ROW_SEPARATOR_WIDTH
+	local separator_width = layout.button_row_separator_width
+	local separator_color = layout.body_separator_color
 	local button_specs = {}
 
 	-- Dictionary-navigation (prev/next) and external-plugin buttons now
@@ -1793,6 +1953,54 @@ function FloatingDictionaryPopup:makeButtons(width)
 		-- render an empty, zero-height row instead of dividing by zero below.
 		return HorizontalGroup:new({})
 	end
+
+	-- Kobo's reference footer: small, natural-width icon buttons packed
+	-- together and pinned to the left, with the rest of the row left empty
+	-- -- never stretched/justified to fill the full width like Classic.
+	if layout.button_layout_mode == "compact_left" then
+		local compact_height = math.floor(button_height * (layout.button_height_scale or 1))
+		local compact_icon_size = math.floor(icon_size * (layout.button_icon_scale or 1))
+		local gap = layout.button_compact_gap or 0
+
+		local function makeCompactButton(spec, callback)
+			spec = spec or {}
+			return PreviewButton:new({
+				text = spec.text,
+				icon = spec.icon,
+				icon_file = spec.icon_file,
+				face = self.button_face,
+				disabled = spec.disabled,
+				width = nil,
+				auto_width = true, -- natural width, not stretched to fill a slot
+				height = compact_height,
+				icon_width = compact_icon_size,
+				icon_height = compact_icon_size,
+				show_parent = self,
+				callback = callback,
+			})
+		end
+
+		local widgets = {}
+		for index, item in ipairs(button_specs) do
+			if index > 1 and gap > 0 then
+				table.insert(widgets, HorizontalSpan:new({ width = gap }))
+			end
+			table.insert(widgets, makeCompactButton(item.spec, item.callback))
+		end
+
+		-- Left-align the packed group within the full row width: the group
+		-- itself stays at its natural (smaller) size, with an invisible
+		-- spacer absorbing whatever width is left over on the right, so
+		-- buttons never get stretched or redistributed across the row.
+		local group = HorizontalGroup:new(widgets)
+		local group_width = group:getSize().w or 0
+		local leftover = math.max(0, width - group_width)
+		return HorizontalGroup:new({
+			group,
+			HorizontalSpan:new({ width = leftover }),
+		})
+	end
+
 	local separator_count = math.max(0, button_count - 1)
 	local available_button_width = math.max(1, width - separator_width * separator_count)
 	local button_width = math.floor(available_button_width / button_count)
@@ -1817,7 +2025,7 @@ function FloatingDictionaryPopup:makeButtons(width)
 
 	local function makeSeparator()
 		return LineWidget:new({
-			background = Blitbuffer.COLOR_GRAY,
+			background = separator_color,
 			dimen = Geom:new({
 				w = separator_width,
 				h = button_height,
@@ -2049,22 +2257,6 @@ function FloatingDictionaryPopup:onNextDictionary()
 	UIManager:close(self)
 	if self.next_callback then
 		return self.next_callback()
-	end
-	return true
-end
-
-function FloatingDictionaryPopup:onDecreaseFontSize()
-	UIManager:close(self)
-	if self.decrease_font_callback then
-		return self.decrease_font_callback()
-	end
-	return true
-end
-
-function FloatingDictionaryPopup:onIncreaseFontSize()
-	UIManager:close(self)
-	if self.increase_font_callback then
-		return self.increase_font_callback()
 	end
 	return true
 end
@@ -2468,6 +2660,15 @@ function FloatingDictionary:addToMainMenu(menu_items)
 			},
 			{
 				text_func = function()
+					return T(_("Popup font size: %1"), self:getPopupFontSize())
+				end,
+				keep_menu_open = true,
+				callback = function(touchmenu_instance)
+					self:showPopupFontSizeDialog(touchmenu_instance)
+				end,
+			},
+			{
+				text_func = function()
 					return T(_("Popup border thickness: %1"), self:getPopupBorderThickness())
 				end,
 				keep_menu_open = true,
@@ -2496,6 +2697,19 @@ function FloatingDictionary:addToMainMenu(menu_items)
 				end,
 				sub_item_table_func = function()
 					return self:genDisplayModeMenu()
+				end,
+			},
+			{
+				text_func = function()
+					for _idx, style in ipairs(POPUP_STYLES) do
+						if style.id == self:getPopupStyle() then
+							return T(_("Popup style: %1"), style.text)
+						end
+					end
+					return _("Popup style")
+				end,
+				sub_item_table_func = function()
+					return self:genPopupStyleMenu()
 				end,
 				separator = true,
 			},
@@ -2583,17 +2797,33 @@ function FloatingDictionary:setPreviewEnabled(enabled)
 	G_reader_settings:saveSetting(SETTING_ENABLED, self.enabled)
 end
 
--- A+/A- adjustment, relative to UI_FONT_SIZE. Persisted so it's remembered
--- across lookups and app restarts. Only affects the word/meta/definition
--- text (rendered via CSS); footer buttons always keep UI_FONT_SIZE.
-function FloatingDictionary:getFontSizeDelta()
-	return G_reader_settings:readSetting(SETTING_FONT_SIZE_DELTA) or 0
+-- Popup text size, chosen from the fixed POPUP_FONT_SIZES list in the
+-- settings menu. Persisted so it's remembered across lookups and app
+-- restarts. Only affects the word/meta/definition text (rendered via CSS)
+-- and the footer buttons, which scale proportionally to it.
+function FloatingDictionary:getPopupFontSize()
+	local saved = G_reader_settings:readSetting(SETTING_POPUP_FONT_SIZE)
+	if type(saved) ~= "number" then
+		return POPUP_FONT_SIZE_DEFAULT
+	end
+	for _, size in ipairs(POPUP_FONT_SIZES) do
+		if size == saved then
+			return saved
+		end
+	end
+	return POPUP_FONT_SIZE_DEFAULT
 end
 
-function FloatingDictionary:setFontSizeDelta(delta)
-	delta = math.max(FONT_SIZE_DELTA_MIN, math.min(FONT_SIZE_DELTA_MAX, delta or 0))
-	G_reader_settings:saveSetting(SETTING_FONT_SIZE_DELTA, delta)
-	return delta
+function FloatingDictionary:setPopupFontSize(size)
+	local valid = POPUP_FONT_SIZE_DEFAULT
+	for _, candidate in ipairs(POPUP_FONT_SIZES) do
+		if candidate == size then
+			valid = size
+			break
+		end
+	end
+	G_reader_settings:saveSetting(SETTING_POPUP_FONT_SIZE, valid)
+	return valid
 end
 
 -- Card height, as a fraction of the screen height. Persisted so it's
@@ -2701,6 +2931,56 @@ function FloatingDictionary:genDisplayModeMenu()
 			end,
 			callback = function()
 				self:setDisplayMode(mode.id)
+			end,
+		})
+	end
+	return items
+end
+
+-- Popup style -------------------------------------------------------------
+
+function FloatingDictionary:getPopupStyle()
+	local saved = G_reader_settings:readSetting(SETTING_POPUP_STYLE)
+	for _idx, style in ipairs(POPUP_STYLES) do
+		if style.id == saved then
+			return saved
+		end
+	end
+	return POPUP_STYLE_DEFAULT
+end
+
+function FloatingDictionary:setPopupStyle(style_id)
+	local valid = false
+	for _idx, style in ipairs(POPUP_STYLES) do
+		if style.id == style_id then
+			valid = true
+			break
+		end
+	end
+	if not valid then
+		style_id = POPUP_STYLE_DEFAULT
+	end
+	G_reader_settings:saveSetting(SETTING_POPUP_STYLE, style_id)
+end
+
+-- Radio-button submenu listing the available popup presentation styles.
+-- Selecting one immediately persists it and every render path re-reads
+-- getPopupStyle() live (via buildPreviewPayload), so the effect is applied
+-- on the very next popup shown -- no restart needed. Every current and
+-- future popup feature keeps working identically under any style; only the
+-- presentation (layout constants + header CSS) changes -- see the "Popup
+-- style" block near the top of this file.
+function FloatingDictionary:genPopupStyleMenu()
+	local items = {}
+	for _idx, style in ipairs(POPUP_STYLES) do
+		table.insert(items, {
+			text = style.text,
+			radio = true,
+			checked_func = function()
+				return self:getPopupStyle() == style.id
+			end,
+			callback = function()
+				self:setPopupStyle(style.id)
 			end,
 		})
 	end
@@ -2996,6 +3276,43 @@ function FloatingDictionary:showCardHeightDialog(touchmenu_instance)
 	}
 	UIManager:show(dialog)
 	dialog:onShowKeyboard()
+end
+
+-- Popup font size dialog ------------------------------------------------------
+-- Same SpinWidget-based picker (increment/decrement + confirm) used below for
+-- "Popup border thickness", for visual/interaction consistency. Uses
+-- SpinWidget's value_table/value_index mode (the same mechanism KOReader's
+-- own menus use for picking among a fixed list of values) so only the sizes
+-- in POPUP_FONT_SIZES are ever selectable, instead of a continuous range.
+-- Applied to every dictionary popup (read fresh each time a popup is built
+-- via getPopupFontSize, so the new value takes effect immediately on the
+-- very next popup shown -- no restart needed) and persisted so it's
+-- remembered across app restarts.
+function FloatingDictionary:showPopupFontSizeDialog(touchmenu_instance)
+	local current_size = self:getPopupFontSize()
+	local current_index = 1
+	for i, size in ipairs(POPUP_FONT_SIZES) do
+		if size == current_size then
+			current_index = i
+			break
+		end
+	end
+
+	UIManager:show(SpinWidget:new{
+		title_text = _("Popup font size"),
+		info_text = _("Font size for the word/definition text in every dictionary popup."),
+		value_table = POPUP_FONT_SIZES,
+		value_index = current_index,
+		value_step = 1,
+		value_hold_step = 2,
+		ok_text = _("Set"),
+		callback = function(spin)
+			self:setPopupFontSize(spin.value)
+			if touchmenu_instance then
+				touchmenu_instance:updateItems()
+			end
+		end,
+	})
 end
 
 -- Popup border dialogs -------------------------------------------------------
@@ -4551,8 +4868,14 @@ function FloatingDictionary:patchDictionary()
 		-- lookup or a cascaded cross-reference. Kept a plain best-effort call
 		-- (never blocks or fails the actual lookup) since history bookkeeping
 		-- should never be able to break normal dictionary use.
+		--
+		-- Records the *resolved* dictionary headword (e.g. "sensatez"), not
+		-- the original inflected text the user selected (e.g. "sensata"):
+		-- otherwise a later review would re-search the original form, which
+		-- may not exist as its own dictionary entry, and show no definition.
+		-- See getResolvedLookupWord.
 		local ok_record, err_record = pcall(function()
-			WordReview:recordLookup(plugin, plugin:getSearchText(word, results[1]))
+			WordReview:recordLookup(plugin, plugin:getResolvedLookupWord(word, results))
 		end)
 		if not ok_record then
 			logger.warn("FloatingDictionary: WordReview:recordLookup failed:", err_record)
@@ -4658,7 +4981,7 @@ function FloatingDictionary:clearSelection()
 end
 
 function FloatingDictionary:getInterfaceFontSize()
-	return Screen:scaleBySize(UI_FONT_SIZE + self:getFontSizeDelta())
+	return Screen:scaleBySize(self:getPopupFontSize())
 end
 
 function FloatingDictionary:getSearchText(word, result)
@@ -5434,15 +5757,18 @@ function FloatingDictionary:buildPreviewPayload(word, result, result_index, resu
 	-- unless the user picked an explicit override in the Font tab, which
 	-- always wins.
 	local doc_font_family = self:getFontFamilyOverride() or getDocFontFamily(self)
-	local font_size_delta = self:getFontSizeDelta()
-	-- A+/A- now also scales the footer buttons (icon size, row height, and
-	-- text-fallback font) by the same ratio as the text, so the whole preview
-	-- grows/shrinks together instead of the buttons staying a fixed size.
-	local button_scale = (UI_FONT_SIZE + font_size_delta) / UI_FONT_SIZE
-	local button_face = getDocFontFace(self, UI_FONT_SIZE + font_size_delta)
+	local popup_font_size = self:getPopupFontSize()
+	-- The chosen popup font size also scales the footer buttons (icon size,
+	-- row height, and text-fallback font) by the same ratio as the text, so
+	-- the whole preview grows/shrinks together instead of the buttons
+	-- staying a fixed size.
+	local button_scale = popup_font_size / UI_FONT_SIZE
+	local button_face = getDocFontFace(self, popup_font_size)
 	local button_icon_size = Screen:scaleBySize(24 * button_scale)
 	local button_row_height = Screen:scaleBySize(46 * button_scale)
 
+
+	local style_id = self:getPopupStyle()
 
 	local shown_word = result.word or word or _("Dictionary")
 	local dict_name = result.dict or _("Dictionary")
@@ -5452,36 +5778,71 @@ function FloatingDictionary:buildPreviewPayload(word, result, result_index, resu
 	if result.no_result then
 		dict_name = _("Dictionary")
 		definition_html = "<p>" .. htmlEscape(_("No definition found.")) .. "</p>"
-		css = getBaseCss(doc_font_family)
+		css = getBaseCss(doc_font_family, style_id)
 	elseif hasDictionaryCss(result) then
 		definition_html = normalizeDictionaryHtml(result.definition)
-		css = getDictionaryPanelCss(result, doc_font_family)
+		css = getDictionaryPanelCss(result, doc_font_family, style_id)
 	else
 		definition_html = normalizeFloatingDictionaryHtml(result.definition)
-		css = getBaseCss(doc_font_family)
+		css = getBaseCss(doc_font_family, style_id)
 	end
 
+	-- Kobo's reference popup puts the "word · n/m" counter on the headword's
+	-- own line (never appended to the dictionary name), and shows the
+	-- dictionary name alone, on its own line, with no counter and no bullet.
+	-- Classic keeps its previous behavior (counter appended to dict_name)
+	-- unchanged.
+	local word_counter_suffix = ""
 	if not result.no_result and result_count and result_count > 1 then
-		dict_name = string.format("%s · %d/%d", dict_name, result_index or 1, result_count)
+		if style_id == POPUP_STYLE_KOBO then
+			word_counter_suffix = string.format(" \xC2\xB7 %d/%d", result_index or 1, result_count)
+		else
+			dict_name = string.format("%s · %d/%d", dict_name, result_index or 1, result_count)
+		end
 	end
 
-	local header_html = table.concat({
-		'<div class="floatingdictionary-word">',
-		htmlEscape(shown_word),
-		"</div>",
-		'<div class="floatingdictionary-meta">',
-		htmlEscape(dict_name),
-		"</div>",
-		'<div class="floatingdictionary-separator"></div>',
-	}, "\n")
+	-- The word/dictionary-name/separator HTML fragments are always the same
+	-- three pieces regardless of style -- only their *order* differs: Kobo's
+	-- reference layout keeps the headword up top but shows the dictionary
+	-- name at the very end, after the definition, instead of right below
+	-- the word. This is the only style-dependent branch in this function;
+	-- shown_word/dict_name/definition_html/css above are computed exactly
+	-- once, identically, for every style.
+	local word_html
+	if style_id == POPUP_STYLE_KOBO and word_counter_suffix ~= "" then
+		word_html = '<div class="floatingdictionary-word">' .. htmlEscape(shown_word)
+			.. '<span class="floatingdictionary-word-counter">' .. htmlEscape(word_counter_suffix) .. "</span></div>"
+	else
+		word_html = '<div class="floatingdictionary-word">' .. htmlEscape(shown_word) .. "</div>"
+	end
+	local meta_html = '<div class="floatingdictionary-meta">' .. htmlEscape(dict_name) .. "</div>"
+	local separator_html = '<div class="floatingdictionary-separator"></div>'
+
+	local html_body
+	if style_id == POPUP_STYLE_KOBO then
+		html_body = table.concat({
+			word_html,
+			separator_html,
+			definition_html,
+			meta_html,
+		}, "\n")
+	else
+		html_body = table.concat({
+			word_html,
+			meta_html,
+			separator_html,
+			definition_html,
+		}, "\n")
+	end
 
 	return {
-		html_body = header_html .. definition_html,
+		html_body = html_body,
 		css = css,
 		html_resource_directory = result.dictionary_resource_directory,
 		button_face = button_face,
 		button_icon_size = button_icon_size,
 		button_row_height = button_row_height,
+		style_id = style_id,
 	}
 end
 
@@ -5584,6 +5945,35 @@ local function buildPreviewResults(results, translation_first, rank_map)
 	end
 
 	return preview_results
+end
+
+-- Resolves the word that Word Review should actually remember for this
+-- lookup: not the original text the user selected/tapped in the book (which
+-- may be an inflected form -- plural, conjugation, gendered form, etc. --
+-- e.g. "sensata"), but the real dictionary entry/headword the popup ends up
+-- showing first (e.g. "sensatez"), exactly as buildPreviewResults would
+-- order it for the actual popup. This keeps Word Review's later re-lookup
+-- pointed at an entry that is guaranteed to exist in the dictionary, instead
+-- of the original inflected form the dictionary had to resolve away from.
+-- Falls back to the originally looked-up word (getSearchText's own
+-- word-or-result.word logic) if, for any reason, no usable preview entry
+-- can be determined -- so a lookup is never silently dropped from history.
+function FloatingDictionary:getResolvedLookupWord(word, results)
+	local ok, preview_results = pcall(
+		buildPreviewResults,
+		results,
+		self:getDisplayMode() == DISPLAY_MODE_LANGUAGE,
+		self:getDictionaryRankMap()
+	)
+
+	if ok and preview_results and preview_results[1] and preview_results[1].result then
+		local headword = preview_results[1].result.word
+		if headword and tostring(headword) ~= "" then
+			return self:getSearchText(headword, preview_results[1].result)
+		end
+	end
+
+	return self:getSearchText(word, results and results[1])
 end
 
 local function normalizeResultIndex(index, count)
@@ -5920,22 +6310,6 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 						end
 					end,
 				})
-			elseif action.kind == "font_decrease" then
-				table.insert(action_specs, {
-					spec = self:getActionIconSpec(action.id),
-					callback = function()
-						self:setFontSizeDelta(self:getFontSizeDelta() - FONT_SIZE_STEP)
-						return showResult(current_index)
-					end,
-				})
-			elseif action.kind == "font_increase" then
-				table.insert(action_specs, {
-					spec = self:getActionIconSpec(action.id),
-					callback = function()
-						self:setFontSizeDelta(self:getFontSizeDelta() + FONT_SIZE_STEP)
-						return showResult(current_index)
-					end,
-				})
 			elseif action.kind == "external" then
 				external_specs = external_specs
 					or self:discoverExternalButtons(dict_self, word, result, current_index, results, boxes, link)
@@ -5969,6 +6343,7 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 			button_face = preview_payload.button_face,
 			button_icon_size = preview_payload.button_icon_size,
 			button_row_height = preview_payload.button_row_height,
+			style_id = preview_payload.style_id,
 			card_height_ratio = self:getCardHeightRatio(),
 			border_thickness = self:getPopupBorderThickness(),
 			border_color = self:getPopupBorderColor(),
@@ -5992,14 +6367,6 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 			end,
 			next_callback = function()
 				return showResult(current_index + 1)
-			end,
-			decrease_font_callback = function()
-				self:setFontSizeDelta(self:getFontSizeDelta() - FONT_SIZE_STEP)
-				return showResult(current_index)
-			end,
-			increase_font_callback = function()
-				self:setFontSizeDelta(self:getFontSizeDelta() + FONT_SIZE_STEP)
-				return showResult(current_index)
 			end,
 			open_button_settings_callback = function()
 				return self:showButtonSettingsMenu(function()
@@ -6073,26 +6440,70 @@ function FloatingDictionary:showReviewPopup(word, results)
 		return true
 	end
 
+	-- Every review card ever shown (e.g. one left over from opening the
+	-- book, plus a new one from waking up right after) is tracked in this
+	-- single shared stack on self, exactly like the normal lookup's
+	-- popup_stack -- so a brand new review popup can hide the previous one
+	-- instead of stacking visibly on top of it, and a tap-outside on
+	-- whichever one is topmost can tear down the *entire* stack in one go,
+	-- leaving nothing behind. Created lazily so existing instances (from
+	-- before this stack existed) still work.
+	self.review_popup_stack = self.review_popup_stack or {}
+
 	local review_popup
 	local current_index = 1
 
+	-- A brand new review card (e.g. one triggered by waking from sleep)
+	-- must not stack visibly on top of a previous, still-open one (e.g.
+	-- from opening the book) -- it should simply replace it, the same way
+	-- a fresh non-cascaded lookup replaces the whole normal popup_stack.
+	-- Closing them here, upfront, means only ever one review widget is
+	-- actually on screen at a time.
+	local function closePreviousReviewCards()
+		while #self.review_popup_stack > 0 do
+			local old_popup = table.remove(self.review_popup_stack)
+			pcall(function()
+				UIManager:close(old_popup)
+			end)
+		end
+	end
+	closePreviousReviewCards()
+
+	-- Closes and removes just this card's own widget from the shared stack,
+	-- without touching any other review card that might also be in it.
 	local function closeReviewPopup()
 		if review_popup then
 			pcall(function()
 				UIManager:close(review_popup)
 			end)
+			for i, p in ipairs(self.review_popup_stack) do
+				if p == review_popup then
+					table.remove(self.review_popup_stack, i)
+					break
+				end
+			end
 			review_popup = nil
-		end
-		if self.close_review_popup == closeReviewPopup then
-			self.close_review_popup = nil
 		end
 	end
 
-	-- Exposed on self (not just as a local) so onSuspend -- which has no
-	-- other reference to this review card, since it's deliberately kept
-	-- outside popup_stack/cascade_history -- can still find and close it
-	-- when the device goes to sleep.
-	self.close_review_popup = closeReviewPopup
+	-- Closes and removes every review card currently in the shared stack,
+	-- bottom to top -- used on tap-outside so the whole trail of review
+	-- popups disappears at once, exactly like the normal dictionary
+	-- popup's tap-outside closes its entire popup_stack. Also exposed on
+	-- self so onSuspend/destroy (which have no other reference to any of
+	-- these cards, since they're deliberately kept outside
+	-- popup_stack/cascade_history) can still find and close them all when
+	-- the device goes to sleep or the plugin is torn down.
+	local function closeAllReviewPopups()
+		while #self.review_popup_stack > 0 do
+			local popup = table.remove(self.review_popup_stack)
+			pcall(function()
+				UIManager:close(popup)
+			end)
+		end
+		review_popup = nil
+	end
+	self.close_review_popup = closeAllReviewPopups
 
 	local function showReviewResult(index)
 		current_index = normalizeResultIndex(index, preview_count)
@@ -6131,22 +6542,6 @@ function FloatingDictionary:showReviewPopup(word, results)
 						end
 					end,
 				})
-			elseif action.kind == "font_decrease" then
-				table.insert(action_specs, {
-					spec = self:getActionIconSpec(action.id),
-					callback = function()
-						self:setFontSizeDelta(self:getFontSizeDelta() - FONT_SIZE_STEP)
-						return showReviewResult(current_index)
-					end,
-				})
-			elseif action.kind == "font_increase" then
-				table.insert(action_specs, {
-					spec = self:getActionIconSpec(action.id),
-					callback = function()
-						self:setFontSizeDelta(self:getFontSizeDelta() + FONT_SIZE_STEP)
-						return showReviewResult(current_index)
-					end,
-				})
 			end
 		end
 
@@ -6159,6 +6554,7 @@ function FloatingDictionary:showReviewPopup(word, results)
 			button_face = preview_payload.button_face,
 			button_icon_size = preview_payload.button_icon_size,
 			button_row_height = preview_payload.button_row_height,
+			style_id = preview_payload.style_id,
 			card_height_ratio = self:getCardHeightRatio(),
 			border_thickness = self:getPopupBorderThickness(),
 			border_color = self:getPopupBorderColor(),
@@ -6176,29 +6572,34 @@ function FloatingDictionary:showReviewPopup(word, results)
 			next_callback = function()
 				return showReviewResult(current_index + 1)
 			end,
-			decrease_font_callback = function()
-				self:setFontSizeDelta(self:getFontSizeDelta() - FONT_SIZE_STEP)
-				return showReviewResult(current_index)
-			end,
-			increase_font_callback = function()
-				self:setFontSizeDelta(self:getFontSizeDelta() + FONT_SIZE_STEP)
-				return showReviewResult(current_index)
-			end,
 			open_button_settings_callback = function()
 				return self:showButtonSettingsMenu(function()
 					return showReviewResult(current_index)
 				end)
 			end,
 			close_preview_callback = function()
-				-- Must actually close the on-screen widget here (same as the
-				-- normal cascade popup's closePreview), not just clear the
-				-- local reference -- otherwise the card never leaves the
-				-- window/event stack, stays visible forever, and swallows
-				-- all taps/gestures for the rest of the reading session.
-				closeReviewPopup()
+				-- Tap-outside must behave exactly like the normal dictionary
+				-- popup: it closes the *entire* stack of currently open
+				-- review cards (self.review_popup_stack), leaving nothing
+				-- visible, rather than only the topmost one. Going through
+				-- self.close_review_popup here -- instead of closing just
+				-- this card's own widget -- guarantees every review popup
+				-- the plugin currently knows about is torn down together, so
+				-- none can survive a tap-outside and stay stuck on screen
+				-- swallowing taps for the rest of the session.
+				if self.close_review_popup then
+					pcall(self.close_review_popup)
+				else
+					closeReviewPopup()
+				end
 				return true
 			end,
 		})
+
+		-- Track this card in the shared stack so a later review popup (e.g.
+		-- from the next resume) can close it before showing itself, and so
+		-- a tap-outside on any review card closes this one too.
+		table.insert(self.review_popup_stack, review_popup)
 
 		-- The real, normal-lookup popup always gets a live dialog widget
 		-- here (dialog = dict_self.dialog), because ScrollHtmlWidget/

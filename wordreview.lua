@@ -271,8 +271,10 @@ end
 -- history sizes without needing any hand-tuned cap.
 function WordReview:pickFromHistory(history)
 	local entries = {}
-	for _, entry in pairs(history.words or {}) do
+	local keys = {}
+	for key, entry in pairs(history.words or {}) do
 		table.insert(entries, entry)
+		table.insert(keys, key)
 	end
 
 	if #entries == 0 then
@@ -293,14 +295,14 @@ function WordReview:pickFromHistory(history)
 	for i, entry in ipairs(entries) do
 		running = running + weights[i]
 		if roll <= running then
-			return entry
+			return entry, keys[i]
 		end
 	end
 
 	-- Floating point safety net: should be unreachable, but guarantees a
 	-- word is always returned rather than nil if rounding ever leaves a
 	-- sliver of `roll` unaccounted for.
-	return entries[#entries]
+	return entries[#entries], keys[#entries]
 end
 
 -- Locates the on-disk .ifo file for a given dictionary display name (the
@@ -464,15 +466,19 @@ function WordReview:pickFallbackWord(plugin)
 	return nil
 end
 
--- Top-level entry point: returns { word = "...", from_fallback = bool } for
--- the word to review right now, or nil if nothing could be found at all
--- (no history and no usable dictionary -- an edge case, but handled so the
--- caller can simply skip showing anything rather than crash).
+-- Top-level entry point: returns { word = "...", from_fallback = bool,
+-- history_key = "..." or nil } for the word to review right now, or nil if
+-- nothing could be found at all (no history and no usable dictionary -- an
+-- edge case, but handled so the caller can simply skip showing anything
+-- rather than crash). history_key is only set when the word came from this
+-- book's history (never for a fallback pick), and lets maybeShowReview
+-- correct that entry in place if the dictionary resolves it to a different
+-- headword (see the migration comment in maybeShowReview).
 function WordReview:pickWordToReview(plugin)
 	local history = self:loadHistory(plugin)
-	local from_history = self:pickFromHistory(history)
+	local from_history, history_key = self:pickFromHistory(history)
 	if from_history then
-		return { word = from_history.word, from_fallback = false }
+		return { word = from_history.word, from_fallback = false, history_key = history_key }
 	end
 
 	return self:pickFallbackWord(plugin)
@@ -481,6 +487,76 @@ end
 -------------------------------------------------------------------------------
 -- Triggering the review popup on book open
 -------------------------------------------------------------------------------
+
+-- Lazily migrates one history entry from an old, inflected-form key/word
+-- (e.g. "sensata", saved before this fix) to the real dictionary headword
+-- the current lookup just resolved to (e.g. "sensatez"). Called only right
+-- after a *successful* real lookup for a word that came from this book's own
+-- history (never for a fallback pick, which has no history entry to begin
+-- with), so it always has a freshly-confirmed-good replacement in hand.
+--
+-- Deliberately incremental rather than a one-time bulk pass over every
+-- book's history file: it piggybacks on a lookup that's already happening
+-- (review picked this word, so it was already being searched), costs
+-- nothing extra, and self-heals the file a little more each time a
+-- previously-mis-recorded word happens to come up for review again. A word
+-- that never comes up again simply keeps its old form forever -- harmless,
+-- since it only means that one entry doesn't benefit from the fix, not that
+-- anything breaks.
+--
+-- Preserves count/last_ts (this is a correction, not a new lookup) and, if
+-- the resolved word normalizes to a key that already exists (e.g. two old
+-- entries both actually resolve to the same headword), merges into that
+-- entry instead of overwriting it, summing counts and keeping the more
+-- recent last_ts -- so no history is silently lost to a collision.
+--
+-- old_word is the exact word this lookup was actually performed for
+-- (choice.word); old_key must still resolve, via normalizeKey, to that same
+-- word, and the entry stored under old_key must still be the one this pick
+-- came from. This guards against ever renaming/merging the wrong entry --
+-- e.g. if the history changed between picking the word and this callback
+-- running (a concurrent lookup elsewhere, or the entry already having been
+-- migrated in the meantime) -- so a mismatch is simply skipped rather than
+-- risking a wrong edit. Combined with the new_key == old_key early return
+-- below, this also guarantees an already-correct entry is never rewritten,
+-- and a once-migrated entry (whose key no longer matches what an older,
+-- stale `choice` thinks it is) is never reprocessed.
+function WordReview:correctHistoryEntry(plugin, old_key, old_word, resolved_word)
+	if not old_key or old_key == "" or not resolved_word or resolved_word == "" then
+		return
+	end
+
+	if self:normalizeKey(old_word) ~= old_key then
+		return -- stale reference; old_key no longer describes old_word
+	end
+
+	local new_key = self:normalizeKey(resolved_word)
+	if new_key == "" or new_key == old_key then
+		return -- already correct, or nothing sensible to migrate to
+	end
+
+	local history = self:loadHistory(plugin)
+	local old_entry = history.words[old_key]
+	if not old_entry or self:normalizeKey(old_entry.word) ~= old_key then
+		return -- already migrated (or changed) since old_key was picked
+	end
+
+	local existing = history.words[new_key]
+	if existing then
+		existing.count = (tonumber(existing.count) or 1) + (tonumber(old_entry.count) or 1)
+		existing.last_ts = math.max(tonumber(existing.last_ts) or 0, tonumber(old_entry.last_ts) or 0)
+		existing.word = resolved_word
+	else
+		history.words[new_key] = {
+			word = resolved_word,
+			count = old_entry.count,
+			last_ts = old_entry.last_ts,
+		}
+	end
+
+	history.words[old_key] = nil
+	self:saveHistory(plugin, history)
+end
 
 -- Called from main.lua's onReaderReady and onResume. Looks up the chosen
 -- review word through the normal dictionary machinery and, on success,
@@ -532,6 +608,36 @@ function WordReview:maybeShowReview(plugin, trigger)
 	if not ok or not results or type(results) ~= "table" or #results == 0 then
 		logger.warn("WordReview: lookup failed for review word:", choice.word)
 		return
+	end
+
+	-- Lazy history migration: if this word came from the book's own history
+	-- (not a fallback pick) and the dictionary just resolved it to a
+	-- different headword than what was stored (e.g. the history still has
+	-- the old inflected form "sensata" from before this fix, and the
+	-- dictionary resolves it to "sensatez"), correct that entry in place so
+	-- future reviews search the real entry instead of repeating the same
+	-- failed lookup. Best-effort: never blocks showing the review popup.
+	--
+	-- The resolved headword is picked with plugin:getResolvedLookupWord,
+	-- the exact same dictionary-ranking/language-mode-aware logic the real
+	-- popup uses to decide which result is shown first -- not just the
+	-- first raw entry in `results` -- so the migration picks the same
+	-- headword a normal lookup would show, regardless of which dictionary
+	-- type or language is involved (definition dictionaries, StarDict
+	-- translation dictionaries, or any other format sdcv/KOReader
+	-- supports, all report `word` on their result the same way).
+	if choice.history_key then
+		local ok_resolve, resolved_word = pcall(function()
+			return plugin:getResolvedLookupWord(choice.word, results)
+		end)
+		if ok_resolve and resolved_word and resolved_word ~= "" then
+			local ok_migrate, err_migrate = pcall(function()
+				self:correctHistoryEntry(plugin, choice.history_key, choice.word, resolved_word)
+			end)
+			if not ok_migrate then
+				logger.warn("WordReview: history migration failed:", err_migrate)
+			end
+		end
 	end
 
 	plugin:showReviewPopup(choice.word, results)
