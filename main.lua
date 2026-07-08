@@ -1988,14 +1988,21 @@ function FloatingDictionaryPopup:makeButtons(width)
 			table.insert(widgets, makeCompactButton(item.spec, item.callback))
 		end
 
-		-- Left-align the packed group within the full row width: the group
-		-- itself stays at its natural (smaller) size, with an invisible
-		-- spacer absorbing whatever width is left over on the right, so
-		-- buttons never get stretched or redistributed across the row.
+		-- Left-align the packed group within the full row width, but start
+		-- it at the same left margin as the rest of the popup's content
+		-- (content_padding_left) instead of flush against the card's inner
+		-- edge -- otherwise the icon column reads as detached/misaligned
+		-- from the headword, dictionary name and definition above it. The
+		-- group itself stays at its natural (smaller) size, with an
+		-- invisible spacer absorbing whatever width is left over on the
+		-- right, so buttons never get stretched or redistributed across
+		-- the row.
+		local left_margin = layout.content_padding_left or 0
 		local group = HorizontalGroup:new(widgets)
 		local group_width = group:getSize().w or 0
-		local leftover = math.max(0, width - group_width)
+		local leftover = math.max(0, width - left_margin - group_width)
 		return HorizontalGroup:new({
+			HorizontalSpan:new({ width = left_margin }),
 			group,
 			HorizontalSpan:new({ width = leftover }),
 		})
