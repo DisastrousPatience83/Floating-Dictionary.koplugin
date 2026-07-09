@@ -1,4 +1,4 @@
-# Floating Dictionary
+# Floating Dictionary EN/ES
 
 A lightweight, highly customizable floating dictionary for KOReader.
 
