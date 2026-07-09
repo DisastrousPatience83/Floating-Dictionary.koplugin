@@ -25,7 +25,7 @@ local dump = require("dump")
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 local util = require("util")
-local _ = require("gettext")
+local _ = require("l10n").gettext
 
 local WordReview = {}
 

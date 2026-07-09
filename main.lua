@@ -30,7 +30,8 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 local Notification = require("ui/widget/notification")
-local _ = require("gettext")
+local L10n = require("l10n")
+local _ = L10n.gettext
 
 -- FastDict: in-process StarDict engine used to answer instant dictionary
 -- lookups (see the "FastDict" section near the end of this file). Pure
@@ -2645,6 +2646,20 @@ function FloatingDictionary:addToMainMenu(menu_items)
 			},
 			{
 				text_func = function()
+					for _idx, lang in ipairs(L10n.AVAILABLE_LANGUAGES) do
+						if lang.code == L10n.getLanguage() then
+							return T(_("Language: %1"), lang.name)
+						end
+					end
+					return _("Language")
+				end,
+				sub_item_table_func = function()
+					return self:genLanguageMenu()
+				end,
+				separator = true,
+			},
+			{
+				text_func = function()
 					local override = self:getFontFamilyOverride()
 					if override then
 						return T(_("Preview font: %1"), override)
@@ -2891,6 +2906,32 @@ function FloatingDictionary:getPopupBorderColor()
 	local level = math.floor((1 - darkness) * 255 + 0.5)
 	level = math.max(0, math.min(255, level))
 	return Blitbuffer.Color8(level)
+end
+
+-- Language ------------------------------------------------------------------
+-- Independent of KOReader's own system-language setting: this plugin reads
+-- its own bundled .po files (see l10n.lua) and lets the user pick a UI
+-- language for Floating Dictionary specifically. Selecting a language here
+-- immediately closes and reopens the settings menu so every label already
+-- on screen re-renders in the newly selected language right away.
+function FloatingDictionary:genLanguageMenu()
+	local items = {}
+	for _idx, lang in ipairs(L10n.AVAILABLE_LANGUAGES) do
+		table.insert(items, {
+			text = lang.name,
+			radio = true,
+			checked_func = function()
+				return L10n.getLanguage() == lang.code
+			end,
+			callback = function(touchmenu_instance)
+				L10n.setLanguage(lang.code)
+				if touchmenu_instance then
+					touchmenu_instance:closeMenu()
+				end
+			end,
+		})
+	end
+	return items
 end
 
 -- Display mode (Personal / Minimal / Full / Language learner) -------------

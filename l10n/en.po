@@ -1,0 +1,383 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: koreader-floatingdictionary\n"
+"Language-Team: English\n"
+"Language: en\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+msgid "%1 (thickness: %2)"
+msgstr "%1 (thickness: %2)"
+
+msgid "%1 - %2"
+msgstr "%1 - %2"
+
+msgid "%1 thickness"
+msgstr "%1 thickness"
+
+msgid "+Vocab"
+msgstr "+Vocab"
+
+msgid "Add to vocabulary builder"
+msgstr "Add to vocabulary builder"
+
+msgid "Added to vocabulary builder."
+msgstr "Added to vocabulary builder."
+
+msgid "Apply current style and color to all highlights"
+msgstr "Apply current style and color to all highlights"
+
+msgid "Border darkness for every dictionary popup, from 0 (white/invisible) to 1 (solid black)."
+msgstr "Border darkness for every dictionary popup, from 0 (white/invisible) to 1 (solid black)."
+
+msgid "Border thickness, in pixels, for every dictionary popup (%1-%2)."
+msgstr "Border thickness, in pixels, for every dictionary popup (%1-%2)."
+
+msgid "Build index caches now"
+msgstr "Build index caches now"
+
+msgid "Button icon: %1 (currently: %2)"
+msgstr "Button icon: %1 (currently: %2)"
+
+msgid "Button text: %1"
+msgstr "Button text: %1"
+
+msgid "Button text: %1 (currently \"%2\")"
+msgstr "Button text: %1 (currently \"%2\")"
+
+msgid "Buttons"
+msgstr "Buttons"
+
+msgid "Buttons from other plugins"
+msgstr "Buttons from other plugins"
+
+msgid "Buttons shown in preview"
+msgstr "Buttons shown in preview"
+
+msgid "Cancel"
+msgstr "Cancel"
+
+msgid "Card height"
+msgstr "Card height"
+
+msgid "Card height: %1 % of screen"
+msgstr "Card height: %1 % of screen"
+
+msgid "Classic"
+msgstr "Classic"
+
+msgid "Could not add word to vocabulary builder."
+msgstr "Could not add word to vocabulary builder."
+
+msgid "Could not translate this word."
+msgstr "Could not translate this word."
+
+msgid "Crosshatch"
+msgstr "Crosshatch"
+
+msgid "Dash underline"
+msgstr "Dash underline"
+
+msgid "Diagonal thick"
+msgstr "Diagonal thick"
+
+msgid "Diagonal thin"
+msgstr "Diagonal thin"
+
+msgid "Dictionary"
+msgstr "Dictionary"
+
+msgid "Dictionary lookup"
+msgstr "Dictionary lookup"
+
+msgid "Dictionary order"
+msgstr "Dictionary order"
+
+msgid "Display mode"
+msgstr "Display mode"
+
+msgid "Display mode: %1"
+msgstr "Display mode: %1"
+
+msgid "Dotted"
+msgstr "Dotted"
+
+msgid "Dotted underline"
+msgstr "Dotted underline"
+
+msgid "Enable Floating Dictionary"
+msgstr "Enable Floating Dictionary"
+
+msgid "Enable card transition animations"
+msgstr "Enable card transition animations"
+
+msgid "Enable instant lookups"
+msgstr "Enable instant lookups"
+
+msgid "Fast lookups (FastDict): off"
+msgstr "Fast lookups (FastDict): off"
+
+msgid "Fast lookups (FastDict): on"
+msgstr "Fast lookups (FastDict): on"
+
+msgid "FastDict: building dictionary index caches…"
+msgstr "FastDict: building dictionary index caches…"
+
+msgid "FastDict: cache build failed: %1"
+msgstr "FastDict: cache build failed: %1"
+
+msgid "FastDict: caches ready (%1 s)."
+msgstr "FastDict: caches ready (%1 s)."
+
+msgid "Fine underline"
+msgstr "Fine underline"
+
+msgid "Floating Dictionary"
+msgstr "Floating Dictionary"
+
+msgid "Floating Dictionary settings"
+msgstr "Floating Dictionary settings"
+
+msgid "Font"
+msgstr "Font"
+
+msgid "Font size for the word/definition text in every dictionary popup."
+msgstr "Font size for the word/definition text in every dictionary popup."
+
+msgid "Full"
+msgstr "Full"
+
+msgid "Fulltext search"
+msgstr "Fulltext search"
+
+msgid "Gray highlight opacity: "
+msgstr "Gray highlight opacity: "
+
+msgid "Grid thick"
+msgstr "Grid thick"
+
+msgid "Grid thin"
+msgstr "Grid thin"
+
+msgid "Hide: %1"
+msgstr "Hide: %1"
+
+msgid "Highlight"
+msgstr "Highlight"
+
+msgid "Highlight color: "
+msgstr "Highlight color: "
+
+msgid "Highlight line height: "
+msgstr "Highlight line height: "
+
+msgid "Highlight styles"
+msgstr "Highlight styles"
+
+msgid "Kobo"
+msgstr "Kobo"
+
+msgid "Language"
+msgstr "Language"
+
+msgid "Language learner"
+msgstr "Language learner"
+
+msgid "Language: %1"
+msgstr "Language: %1"
+
+msgid "Line thickness in pixels (%1-%2)."
+msgstr "Line thickness in pixels (%1-%2)."
+
+msgid "Minimal"
+msgstr "Minimal"
+
+msgid "Move down: %1"
+msgstr "Move down: %1"
+
+msgid "Move up: %1"
+msgstr "Move up: %1"
+
+msgid "Next"
+msgstr "Next"
+
+msgid "Next result"
+msgstr "Next result"
+
+msgid "No .svg files found in %1"
+msgstr "No .svg files found in %1"
+
+msgid "No buttons available."
+msgstr "No buttons available."
+
+msgid "No definition found."
+msgstr "No definition found."
+
+msgid "No definition."
+msgstr "No definition."
+
+msgid "No dictionaries found. Install or enable a dictionary first."
+msgstr "No dictionaries found. Install or enable a dictionary first."
+
+msgid "No selection to highlight."
+msgstr "No selection to highlight."
+
+msgid "No selection to look up."
+msgstr "No selection to look up."
+
+msgid "No text to translate."
+msgstr "No text to translate."
+
+msgid "No word to add."
+msgstr "No word to add."
+
+msgid "None (use text)"
+msgstr "None (use text)"
+
+msgid "Note marker: "
+msgstr "Note marker: "
+
+msgid "Outline thick"
+msgstr "Outline thick"
+
+msgid "Percentage of the screen height used by the dictionary card (%1-%2)."
+msgstr "Percentage of the screen height used by the dictionary card (%1-%2)."
+
+msgid "Personal"
+msgstr "Personal"
+
+msgid "Plain underline"
+msgstr "Plain underline"
+
+msgid "Please enter a valid number."
+msgstr "Please enter a valid number."
+
+msgid "Plugin folder not found."
+msgstr "Plugin folder not found."
+
+msgid "Popup border darkness"
+msgstr "Popup border darkness"
+
+msgid "Popup border darkness: %1 %"
+msgstr "Popup border darkness: %1 %"
+
+msgid "Popup border thickness"
+msgstr "Popup border thickness"
+
+msgid "Popup border thickness: %1"
+msgstr "Popup border thickness: %1"
+
+msgid "Popup font size"
+msgstr "Popup font size"
+
+msgid "Popup font size: %1"
+msgstr "Popup font size: %1"
+
+msgid "Popup style"
+msgstr "Popup style"
+
+msgid "Popup style: %1"
+msgstr "Popup style: %1"
+
+msgid "Prev"
+msgstr "Prev"
+
+msgid "Preview font"
+msgstr "Preview font"
+
+msgid "Preview font: %1"
+msgstr "Preview font: %1"
+
+msgid "Previous result"
+msgstr "Previous result"
+
+msgid "Rebuild index caches"
+msgstr "Rebuild index caches"
+
+msgid "Reset to default"
+msgstr "Reset to default"
+
+msgid "Save"
+msgstr "Save"
+
+msgid "Search"
+msgstr "Search"
+
+msgid "Set"
+msgstr "Set"
+
+msgid "Show buttons from other dictionary plugins"
+msgstr "Show buttons from other dictionary plugins"
+
+msgid "Show review word when opening a book"
+msgstr "Show review word when opening a book"
+
+msgid "Show review word when waking from sleep"
+msgstr "Show review word when waking from sleep"
+
+msgid "Show: %1"
+msgstr "Show: %1"
+
+msgid "Solid light"
+msgstr "Solid light"
+
+msgid "Solid medium"
+msgstr "Solid medium"
+
+msgid "Status: %1 dictionaries via FastDict, %2 via sdcv"
+msgstr "Status: %1 dictionaries via FastDict, %2 via sdcv"
+
+msgid "Status: error — using sdcv (see log)"
+msgstr "Status: error — using sdcv (see log)"
+
+msgid "Status: idle (loads on first lookup)"
+msgstr "Status: idle (loads on first lookup)"
+
+msgid "Tap a button to select it, then use \"Move up\" / \"Move down\" to set its position. Use the checkbox row to show/hide it."
+msgstr "Tap a button to select it, then use \"Move up\" / \"Move down\" to set its position. Use the checkbox row to show/hide it."
+
+msgid "Tap a dictionary to select it, then use \"Move up\" / \"Move down\" below to set its priority. Dictionaries higher on this list appear first when you look up a word."
+msgstr "Tap a dictionary to select it, then use \"Move up\" / \"Move down\" below to set its priority. Dictionaries higher on this list appear first when you look up a word."
+
+msgid "Text shown on this button in the popup. Leave blank to use the default single-letter icon."
+msgstr "Text shown on this button in the popup. Leave blank to use the default single-letter icon."
+
+msgid "Thick underline"
+msgstr "Thick underline"
+
+msgid "Translate"
+msgstr "Translate"
+
+msgid "Use book font (default)"
+msgstr "Use book font (default)"
+
+msgid "Vocabulary builder is not available."
+msgstr "Vocabulary builder is not available."
+
+msgid "Wavy fill"
+msgstr "Wavy fill"
+
+msgid "Wavy underline"
+msgstr "Wavy underline"
+
+msgid "Wiki"
+msgstr "Wiki"
+
+msgid "Wikipedia"
+msgstr "Wikipedia"
+
+msgid "Word Review"
+msgstr "Word Review"
+
+msgid "Word to review"
+msgstr "Word to review"
+
+msgid "hidden"
+msgstr "hidden"
+
+msgid "none, using text"
+msgstr "none, using text"
+
+msgid "shown"
+msgstr "shown"
