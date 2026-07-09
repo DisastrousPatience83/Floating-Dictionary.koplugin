@@ -52,6 +52,14 @@ local Screen = Device.screen
 -- nil, making the animations toggle silently no-op).
 local SETTING_ANIMATIONS_ENABLED = "floatingdictionary_animations_enabled"
 
+-- Buttons registered by other plugins (e.g. X-Ray) via the modern
+-- ReaderDictionary:addToDictButtons API, keyed by spec.id. Shared at
+-- module level (not per FloatingDictionary instance) because the patch in
+-- patchDictionary() below is only ever installed once per app run, same
+-- reasoning as fastdict_shared further down this file. Read by
+-- discoverExternalButtons(), written by the addToDictButtons patch.
+local modern_plugin_buttons_shared = {}
+
 -- =============================================================================
 -- Embedded page-turn "wipe" animation (adapted from the standalone
 -- `2-Page-turn-animation.lua` patch), self-contained so this plugin does not
@@ -4898,6 +4906,26 @@ function FloatingDictionary:patchDictionary()
 		return
 	end
 
+	-- Intercept the modern dictionary button registration API
+	-- (ReaderDictionary:addToDictButtons), used by newer KOReader-version
+	-- plugins (e.g. X-Ray) instead of firing the legacy "DictButtonsReady"
+	-- event. Buttons registered this way are stored in a module-level
+	-- shared table (not per-instance, since this patch only ever runs
+	-- once per app run) so discoverExternalButtons can harvest them
+	-- alongside the legacy ones. The original method is still called
+	-- through so the native dictionary popup keeps working exactly as
+	-- before.
+	if type(dictionary.addToDictButtons) == "function" and not dictionary._floatingdictionary_addbuttons_patched then
+		local original_addToDictButtons = dictionary.addToDictButtons
+		dictionary.addToDictButtons = function(dict_self, spec)
+			if spec and spec.id then
+				modern_plugin_buttons_shared[spec.id] = spec
+			end
+			return original_addToDictButtons(dict_self, spec)
+		end
+		dictionary._floatingdictionary_addbuttons_patched = true
+	end
+
 	self.original_showDict = dictionary.showDict
 	self.patched_dictionary = dictionary
 
@@ -5423,8 +5451,65 @@ function FloatingDictionary:discoverExternalButtons(dict_self, word, result, res
 		lang = result.lang,
 
 		button_table = fake_button_table,
+
+		-- Dummy close methods, mirroring the no-op button_table stand-in
+		-- above: some plugin callbacks (via either registration path) poke
+		-- at the popup's own close/onClose/closeWidget after acting, and
+		-- fake_popup never gets shown or torn down for real.
+		close = function() end,
+		onClose = function() end,
+		closeWidget = function() end,
 	}
 
+	local discovered = {}
+	local seen_ids = {}
+
+	-- 1. Harvest buttons registered via the modern addToDictButtons API
+	-- (e.g. X-Ray on newer KOReader versions). Iterated in a stable
+	-- (sorted) order since pairs() over a plain table has no guaranteed
+	-- order, so button placement doesn't shuffle between lookups.
+	local modern_ids = {}
+	for id in pairs(modern_plugin_buttons_shared) do
+		table.insert(modern_ids, id)
+	end
+	table.sort(modern_ids)
+
+	for _, id in ipairs(modern_ids) do
+		local spec = modern_plugin_buttons_shared[id]
+
+		local should_show = true
+		if type(spec.show_func) == "function" then
+			local ok_show, res = pcall(spec.show_func, fake_popup)
+			should_show = ok_show and res
+		end
+
+		if should_show
+			and spec.id ~= ACTION_VOCABULARY
+			and type(spec.callback) == "function" then
+			local btn_text = spec.text or "?"
+			if type(spec.text_func) == "function" then
+				local ok_text, res = pcall(spec.text_func, fake_popup)
+				if ok_text and res then
+					btn_text = res
+				end
+			end
+
+			table.insert(discovered, {
+				id = spec.id,
+				text = btn_text,
+				icon = spec.icon,
+				callback = function()
+					return spec.callback(fake_popup)
+				end,
+			})
+			if spec.id then
+				seen_ids[spec.id] = true
+			end
+		end
+	end
+
+	-- 2. Harvest legacy buttons via the "DictButtonsReady" event (e.g.
+	-- WordReference, older-style plugins).
 	local button_rows = {}
 
 	local ok, err = pcall(function()
@@ -5433,19 +5518,24 @@ function FloatingDictionary:discoverExternalButtons(dict_self, word, result, res
 
 	if not ok then
 		logger.warn("FloatingDictionary: DictButtonsReady discovery failed:", err)
-		return {}
+		return discovered
 	end
 
-	local discovered = {}
 	for _, row in ipairs(button_rows) do
 		if type(row) == "table" then
 			for _, spec in ipairs(row) do
 				-- Skip the vocabulary button: we already surface it as a
-				-- first-class, icon-capable action above.
+				-- first-class, icon-capable action above. Also skip any id
+				-- already harvested via addToDictButtons above, in case a
+				-- plugin registers through both APIs at once.
 				if type(spec) == "table"
 					and spec.id ~= ACTION_VOCABULARY
-					and type(spec.callback) == "function" then
+					and type(spec.callback) == "function"
+					and not (spec.id and seen_ids[spec.id]) then
 					table.insert(discovered, spec)
+					if spec.id then
+						seen_ids[spec.id] = true
+					end
 				end
 			end
 		end
