@@ -304,10 +304,3 @@ plugins/
 | Built-in page-turn animations | Built-in highlight styles |
 | FastDict fallback | No external patches required |
 
----
-
-# License
-
-Distributed under the same license as this repository.
-
-Contributions, bug reports and feature requests are always welcome.
