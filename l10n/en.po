@@ -16,23 +16,50 @@ msgstr "%1 - %2"
 msgid "%1 thickness"
 msgstr "%1 thickness"
 
+msgid "%1 word(s) selected"
+msgstr "%1 word(s) selected"
+
+msgid "%1/%2"
+msgstr "%1/%2"
+
+msgid "(no context saved for this word)"
+msgstr "(no context saved for this word)"
+
 msgid "+Vocab"
 msgstr "+Vocab"
+
+msgid "Add Note"
+msgstr "Add Note"
 
 msgid "Add to vocabulary builder"
 msgstr "Add to vocabulary builder"
 
+msgid "Added \"%1\" to Word Review."
+msgstr "Added \"%1\" to Word Review."
+
 msgid "Added to vocabulary builder."
 msgstr "Added to vocabulary builder."
 
+msgid "All (%1)"
+msgstr "All (%1)"
+
+msgid "Appearance"
+msgstr "Appearance"
+
 msgid "Apply current style and color to all highlights"
 msgstr "Apply current style and color to all highlights"
+
+msgid "Available buttons"
+msgstr "Available buttons"
 
 msgid "Border darkness for every dictionary popup, from 0 (white/invisible) to 1 (solid black)."
 msgstr "Border darkness for every dictionary popup, from 0 (white/invisible) to 1 (solid black)."
 
 msgid "Border thickness, in pixels, for every dictionary popup (%1-%2)."
 msgstr "Border thickness, in pixels, for every dictionary popup (%1-%2)."
+
+msgid "Both"
+msgstr "Both"
 
 msgid "Build index caches now"
 msgstr "Build index caches now"
@@ -64,11 +91,23 @@ msgstr "Card height"
 msgid "Card height: %1 % of screen"
 msgstr "Card height: %1 % of screen"
 
+msgid "Choose up to 3 buttons for the small selection menu (shown when you select text), and set their order."
+msgstr "Choose up to 3 buttons for the small selection menu (shown when you select text), and set their order."
+
 msgid "Classic"
 msgstr "Classic"
 
+msgid "Context"
+msgstr "Context"
+
+msgid "Context menu"
+msgstr "Context menu"
+
 msgid "Could not add word to vocabulary builder."
 msgstr "Could not add word to vocabulary builder."
+
+msgid "Could not save word for review."
+msgstr "Could not save word for review."
 
 msgid "Could not translate this word."
 msgstr "Could not translate this word."
@@ -78,6 +117,27 @@ msgstr "Crosshatch"
 
 msgid "Dash underline"
 msgstr "Dash underline"
+
+msgid "Delete"
+msgstr "Delete"
+
+msgid "Delete %1 selected word(s)?"
+msgstr "Delete %1 selected word(s)?"
+
+msgid "Delete ALL saved words, from every book?\nThis cannot be undone."
+msgstr "Delete ALL saved words, from every book?\nThis cannot be undone."
+
+msgid "Delete \"%1\" from your saved words?"
+msgstr "Delete \"%1\" from your saved words?"
+
+msgid "Delete all saved words"
+msgstr "Delete all saved words"
+
+msgid "Delete selected"
+msgstr "Delete selected"
+
+msgid "Deselect all"
+msgstr "Deselect all"
 
 msgid "Diagonal thick"
 msgstr "Diagonal thick"
@@ -115,6 +175,12 @@ msgstr "Enable card transition animations"
 msgid "Enable instant lookups"
 msgstr "Enable instant lookups"
 
+msgid "Exit Flashcards"
+msgstr "Exit Flashcards"
+
+msgid "Exit select mode"
+msgstr "Exit select mode"
+
 msgid "Fast lookups (FastDict): off"
 msgstr "Fast lookups (FastDict): off"
 
@@ -132,6 +198,9 @@ msgstr "FastDict: caches ready (%1 s)."
 
 msgid "Fine underline"
 msgstr "Fine underline"
+
+msgid "Flashcards"
+msgstr "Flashcards"
 
 msgid "Floating Dictionary"
 msgstr "Floating Dictionary"
@@ -190,11 +259,32 @@ msgstr "Language: %1"
 msgid "Line thickness in pixels (%1-%2)."
 msgstr "Line thickness in pixels (%1-%2)."
 
+msgid "Manage saved words"
+msgstr "Manage saved words"
+
+msgid "Mark as Mastered"
+msgstr "Mark as Mastered"
+
+msgid "Mastered (%1)"
+msgstr "Mastered (%1)"
+
+msgid "Maximum of %1 buttons. Remove one first."
+msgstr "Maximum of %1 buttons. Remove one first."
+
 msgid "Minimal"
 msgstr "Minimal"
 
+msgid "Move down"
+msgstr "Move down"
+
 msgid "Move down: %1"
 msgstr "Move down: %1"
+
+msgid "Move to Review"
+msgstr "Move to Review"
+
+msgid "Move up"
+msgstr "Move up"
 
 msgid "Move up: %1"
 msgstr "Move up: %1"
@@ -211,6 +301,9 @@ msgstr "No .svg files found in %1"
 msgid "No buttons available."
 msgstr "No buttons available."
 
+msgid "No definition found for \"%1\"."
+msgstr "No definition found for \"%1\"."
+
 msgid "No definition found."
 msgstr "No definition found."
 
@@ -219,6 +312,9 @@ msgstr "No definition."
 
 msgid "No dictionaries found. Install or enable a dictionary first."
 msgstr "No dictionaries found. Install or enable a dictionary first."
+
+msgid "No selection to annotate."
+msgstr "No selection to annotate."
 
 msgid "No selection to highlight."
 msgstr "No selection to highlight."
@@ -232,11 +328,35 @@ msgstr "No text to translate."
 msgid "No word to add."
 msgstr "No word to add."
 
+msgid "No words in this view"
+msgstr "No words in this view"
+
+msgid "No words saved yet"
+msgstr "No words saved yet"
+
+msgid "No words selected"
+msgstr "No words selected"
+
+msgid "No words to review."
+msgstr "No words to review."
+
 msgid "None (use text)"
 msgstr "None (use text)"
 
+msgid "Note"
+msgstr "Note"
+
 msgid "Note marker: "
 msgstr "Note marker: "
+
+msgid "Nothing to save."
+msgstr "Nothing to save."
+
+msgid "Only random words"
+msgstr "Only random words"
+
+msgid "Only saved words"
+msgstr "Only saved words"
 
 msgid "Outline thick"
 msgstr "Outline thick"
@@ -292,8 +412,14 @@ msgstr "Preview font: %1"
 msgid "Previous result"
 msgstr "Previous result"
 
+msgid "Random"
+msgstr "Random"
+
 msgid "Rebuild index caches"
 msgstr "Rebuild index caches"
+
+msgid "Remove from small menu"
+msgstr "Remove from small menu"
 
 msgid "Reset to default"
 msgstr "Reset to default"
@@ -301,8 +427,20 @@ msgstr "Reset to default"
 msgid "Save"
 msgstr "Save"
 
+msgid "Save for review"
+msgstr "Save for review"
+
 msgid "Search"
 msgstr "Search"
+
+msgid "See Definition"
+msgstr "See Definition"
+
+msgid "Select all"
+msgstr "Select all"
+
+msgid "Select multiple"
+msgstr "Select multiple"
 
 msgid "Set"
 msgstr "Set"
@@ -318,6 +456,9 @@ msgstr "Show review word when waking from sleep"
 
 msgid "Show: %1"
 msgstr "Show: %1"
+
+msgid "Small menu buttons"
+msgstr "Small menu buttons"
 
 msgid "Solid light"
 msgstr "Solid light"
@@ -346,8 +487,14 @@ msgstr "Text shown on this button in the popup. Leave blank to use the default s
 msgid "Thick underline"
 msgstr "Thick underline"
 
+msgid "This Book (%1)"
+msgstr "This Book (%1)"
+
 msgid "Translate"
 msgstr "Translate"
+
+msgid "Unknown book"
+msgstr "Unknown book"
 
 msgid "Use book font (default)"
 msgstr "Use book font (default)"
@@ -370,14 +517,26 @@ msgstr "Wikipedia"
 msgid "Word Review"
 msgstr "Word Review"
 
+msgid "Word Review (%1)"
+msgstr "Word Review (%1)"
+
+msgid "Word source: %1"
+msgstr "Word source: %1"
+
 msgid "Word to review"
 msgstr "Word to review"
+
+msgid "Words mastered: %1"
+msgstr "Words mastered: %1"
 
 msgid "hidden"
 msgstr "hidden"
 
 msgid "none, using text"
 msgstr "none, using text"
+
+msgid "seen %1×"
+msgstr "seen %1×"
 
 msgid "shown"
 msgstr "shown"

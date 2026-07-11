@@ -16,23 +16,50 @@ msgstr "%1 - %2"
 msgid "%1 thickness"
 msgstr "Grosor de %1"
 
+msgid "%1 word(s) selected"
+msgstr "%1 palabra(s) seleccionada(s)"
+
+msgid "%1/%2"
+msgstr "%1/%2"
+
+msgid "(no context saved for this word)"
+msgstr "(no hay contexto guardado para esta palabra)"
+
 msgid "+Vocab"
 msgstr "+Vocab"
+
+msgid "Add Note"
+msgstr "Añadir nota"
 
 msgid "Add to vocabulary builder"
 msgstr "Añadir a vocabulario"
 
+msgid "Added \"%1\" to Word Review."
+msgstr "Se añadió \"%1\" a Repaso de palabras."
+
 msgid "Added to vocabulary builder."
 msgstr "Añadida a vocabulario."
 
+msgid "All (%1)"
+msgstr "Todos (%1)"
+
+msgid "Appearance"
+msgstr "Apariencia"
+
 msgid "Apply current style and color to all highlights"
 msgstr "Aplicar a todos los subrayados"
+
+msgid "Available buttons"
+msgstr "Botones disponibles"
 
 msgid "Border darkness for every dictionary popup, from 0 (white/invisible) to 1 (solid black)."
 msgstr "Intensidad del borde, de 0 (invisible) a 1 (negro)."
 
 msgid "Border thickness, in pixels, for every dictionary popup (%1-%2)."
 msgstr "Grosor del borde en píxeles (%1-%2)."
+
+msgid "Both"
+msgstr "Ambos"
 
 msgid "Build index caches now"
 msgstr "Generar índices ahora"
@@ -64,11 +91,23 @@ msgstr "Altura de la tarjeta"
 msgid "Card height: %1 % of screen"
 msgstr "Altura: %1 % de pantalla"
 
+msgid "Choose up to 3 buttons for the small selection menu (shown when you select text), and set their order."
+msgstr "Elige hasta 3 botones para el menú pequeño de selección (aparece al seleccionar texto) y define su orden."
+
 msgid "Classic"
 msgstr "Clásico"
 
+msgid "Context"
+msgstr "Contexto"
+
+msgid "Context menu"
+msgstr "Menú contextual"
+
 msgid "Could not add word to vocabulary builder."
 msgstr "No se pudo añadir la palabra."
+
+msgid "Could not save word for review."
+msgstr "No se pudo guardar la palabra para repaso."
 
 msgid "Could not translate this word."
 msgstr "No se pudo traducir."
@@ -78,6 +117,27 @@ msgstr "Trama cruzada"
 
 msgid "Dash underline"
 msgstr "Subrayado discontinuo"
+
+msgid "Delete"
+msgstr "Eliminar"
+
+msgid "Delete %1 selected word(s)?"
+msgstr "¿Eliminar %1 palabra(s) seleccionada(s)?"
+
+msgid "Delete ALL saved words, from every book?\nThis cannot be undone."
+msgstr "¿Eliminar TODAS las palabras guardadas, de todos los libros?\nEsta acción no se puede deshacer."
+
+msgid "Delete \"%1\" from your saved words?"
+msgstr "¿Eliminar \"%1\" de tus palabras guardadas?"
+
+msgid "Delete all saved words"
+msgstr "Eliminar todas las palabras guardadas"
+
+msgid "Delete selected"
+msgstr "Eliminar seleccionadas"
+
+msgid "Deselect all"
+msgstr "Deseleccionar todo"
 
 msgid "Diagonal thick"
 msgstr "Diagonal gruesa"
@@ -115,6 +175,12 @@ msgstr "Animaciones de tarjeta"
 msgid "Enable instant lookups"
 msgstr "Búsquedas instantáneas"
 
+msgid "Exit Flashcards"
+msgstr "Salir de tarjetas"
+
+msgid "Exit select mode"
+msgstr "Salir del modo selección"
+
 msgid "Fast lookups (FastDict): off"
 msgstr "Búsqueda rápida: desactivada"
 
@@ -132,6 +198,9 @@ msgstr "Caché lista (%1 s)."
 
 msgid "Fine underline"
 msgstr "Subrayado fino"
+
+msgid "Flashcards"
+msgstr "Tarjetas"
 
 msgid "Floating Dictionary"
 msgstr "Diccionario Flotante"
@@ -190,11 +259,32 @@ msgstr "Idioma: %1"
 msgid "Line thickness in pixels (%1-%2)."
 msgstr "Grosor en píxeles (%1-%2)."
 
+msgid "Manage saved words"
+msgstr "Gestionar palabras guardadas"
+
+msgid "Mark as Mastered"
+msgstr "Marcar como dominada"
+
+msgid "Mastered (%1)"
+msgstr "Dominadas (%1)"
+
+msgid "Maximum of %1 buttons. Remove one first."
+msgstr "Máximo de %1 botones. Elimina uno primero."
+
 msgid "Minimal"
 msgstr "Mínimo"
 
+msgid "Move down"
+msgstr "Mover abajo"
+
 msgid "Move down: %1"
 msgstr "Bajar: %1"
+
+msgid "Move to Review"
+msgstr "Mover a repaso"
+
+msgid "Move up"
+msgstr "Mover arriba"
 
 msgid "Move up: %1"
 msgstr "Subir: %1"
@@ -211,6 +301,9 @@ msgstr "Sin archivos .svg en %1"
 msgid "No buttons available."
 msgstr "Sin botones disponibles."
 
+msgid "No definition found for \"%1\"."
+msgstr "No se encontró definición para \"%1\"."
+
 msgid "No definition found."
 msgstr "Sin definición."
 
@@ -219,6 +312,9 @@ msgstr "Sin definición."
 
 msgid "No dictionaries found. Install or enable a dictionary first."
 msgstr "Instale o active un diccionario."
+
+msgid "No selection to annotate."
+msgstr "No hay selección para anotar."
 
 msgid "No selection to highlight."
 msgstr "Nada seleccionado."
@@ -232,11 +328,35 @@ msgstr "Sin texto para traducir."
 msgid "No word to add."
 msgstr "Sin palabra que añadir."
 
+msgid "No words in this view"
+msgstr "No hay palabras en esta vista"
+
+msgid "No words saved yet"
+msgstr "Aún no hay palabras guardadas"
+
+msgid "No words selected"
+msgstr "No hay palabras seleccionadas"
+
+msgid "No words to review."
+msgstr "No hay palabras para repasar."
+
 msgid "None (use text)"
 msgstr "Ninguno (usar texto)"
 
+msgid "Note"
+msgstr "Nota"
+
 msgid "Note marker: "
 msgstr "Marcador: "
+
+msgid "Nothing to save."
+msgstr "Nada que guardar."
+
+msgid "Only random words"
+msgstr "Solo palabras aleatorias"
+
+msgid "Only saved words"
+msgstr "Solo palabras guardadas"
 
 msgid "Outline thick"
 msgstr "Contorno grueso"
@@ -292,8 +412,14 @@ msgstr "Tipografía: %1"
 msgid "Previous result"
 msgstr "Resultado anterior"
 
+msgid "Random"
+msgstr "Aleatorio"
+
 msgid "Rebuild index caches"
 msgstr "Regenerar índices"
+
+msgid "Remove from small menu"
+msgstr "Quitar del menú pequeño"
 
 msgid "Reset to default"
 msgstr "Restablecer"
@@ -301,8 +427,20 @@ msgstr "Restablecer"
 msgid "Save"
 msgstr "Guardar"
 
+msgid "Save for review"
+msgstr "Guardar para repaso"
+
 msgid "Search"
 msgstr "Buscar"
+
+msgid "See Definition"
+msgstr "Ver definición"
+
+msgid "Select all"
+msgstr "Seleccionar todo"
+
+msgid "Select multiple"
+msgstr "Seleccionar varias"
 
 msgid "Set"
 msgstr "Aplicar"
@@ -318,6 +456,9 @@ msgstr "Mostrar palabra al reactivar pantalla"
 
 msgid "Show: %1"
 msgstr "Mostrar: %1"
+
+msgid "Small menu buttons"
+msgstr "Botones del menú pequeño"
 
 msgid "Solid light"
 msgstr "Sólido claro"
@@ -346,8 +487,14 @@ msgstr "Déjelo en blanco para usar una letra por defecto."
 msgid "Thick underline"
 msgstr "Subrayado grueso"
 
+msgid "This Book (%1)"
+msgstr "Este libro (%1)"
+
 msgid "Translate"
 msgstr "Traducir"
+
+msgid "Unknown book"
+msgstr "Libro desconocido"
 
 msgid "Use book font (default)"
 msgstr "Usar tipografía del libro"
@@ -370,14 +517,26 @@ msgstr "Wikipedia"
 msgid "Word Review"
 msgstr "Repaso de palabras"
 
+msgid "Word Review (%1)"
+msgstr "Repaso de palabras (%1)"
+
+msgid "Word source: %1"
+msgstr "Origen de la palabra: %1"
+
 msgid "Word to review"
 msgstr "Palabra a repasar"
+
+msgid "Words mastered: %1"
+msgstr "Palabras dominadas: %1"
 
 msgid "hidden"
 msgstr "oculto"
 
 msgid "none, using text"
 msgstr "ninguno"
+
+msgid "seen %1×"
+msgstr "visto %1×"
 
 msgid "shown"
 msgstr "visible"

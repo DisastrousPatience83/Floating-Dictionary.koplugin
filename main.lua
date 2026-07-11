@@ -663,7 +663,12 @@ end
 
 local FloatingDictionary = WidgetContainer:extend({
 	name = "floatingdictionary",
-	is_doc_only = true,
+	-- Item 16: the plugin now also loads with no book open (e.g. from the
+	-- file browser), so it can offer a small "Word Review" / "Manage saved
+	-- words" menu there -- see addToMainMenu below, which shows a much
+	-- simpler menu in that case, and init(), which skips all the
+	-- reader-only patching when there's no document to patch against.
+	is_doc_only = false,
 })
 
 -- UI constants ---------------------------------------------------------------
@@ -727,6 +732,7 @@ local ICON_NEXT = "chevron.right"
 local SETTING_ENABLED = "floatingdictionary_enabled"
 local SETTING_VISIBLE_ACTIONS = "floatingdictionary_visible_actions"
 local SETTING_ACTIONS_ORDER = "floatingdictionary_actions_order"
+local SETTING_SMALL_MENU_BUTTONS = "floatingdictionary_smallmenu_buttons"
 -- Per-action custom footer button labels. Only actions that render as a
 -- text-fallback button (see getActionIconSpec/getButtonInitial) are
 -- affected; an empty/unset entry means "use the default initial letter".
@@ -1031,6 +1037,61 @@ for _, action in ipairs(ACTIONS) do
 	ACTION_BY_ID[action.id] = action
 end
 
+-- Actions selectable for the small "Highlight / Add Note" style selection
+-- menu (FloatingActionMenu, see below). Deliberately a separate, smaller
+-- registry from ACTIONS/ACTION_BY_ID above: those drive the full-width
+-- dictionary card's footer (icons, nav arrows, external-plugin buttons,
+-- unlimited count); this one only ever needs a handful of native KOReader
+-- actions, always shown as plain text, capped at SMALL_MENU_MAX_BUTTONS.
+local SMALL_MENU_ACTION_HIGHLIGHT = "sm_highlight"
+local SMALL_MENU_ACTION_ADD_NOTE = "sm_add_note"
+local SMALL_MENU_ACTION_WORD_REVIEW = "sm_word_review"
+local SMALL_MENU_ACTION_WIKIPEDIA = "sm_wikipedia"
+local SMALL_MENU_ACTION_TRANSLATE = "sm_translate"
+local SMALL_MENU_ACTION_SEARCH_BOOK = "sm_search_book"
+
+local SMALL_MENU_ACTIONS = {
+	-- "label" is the descriptive text shown in the settings menu (where
+	-- there's room to be clear); "short_label" is what actually renders on
+	-- the small selection-menu button itself, kept deliberately short so it
+	-- never gets clipped even at a modest card width.
+	{ id = SMALL_MENU_ACTION_HIGHLIGHT, label = _("Highlight"), short_label = _("Highlight") },
+	{ id = SMALL_MENU_ACTION_ADD_NOTE, label = _("Add Note"), short_label = _("Note") },
+	-- Short, but explicit that this saves the word for later review (see
+	-- addSelectionToWordReview / the "Word review" feature below).
+	{ id = SMALL_MENU_ACTION_WORD_REVIEW, label = _("Save for review"), short_label = _("Save") },
+	{ id = SMALL_MENU_ACTION_WIKIPEDIA, label = _("Wikipedia"), short_label = _("Wikipedia") },
+	{ id = SMALL_MENU_ACTION_TRANSLATE, label = _("Translate"), short_label = _("Translate") },
+	{ id = SMALL_MENU_ACTION_SEARCH_BOOK, label = _("Fulltext search"), short_label = _("Search") },
+}
+
+local SMALL_MENU_ACTION_BY_ID = {}
+for _, action in ipairs(SMALL_MENU_ACTIONS) do
+	SMALL_MENU_ACTION_BY_ID[action.id] = action
+end
+
+-- How much surrounding text to capture as "context" when the user saves a
+-- word for review (see FloatingDictionary:getSelectionContext below): a
+-- hard cap on the resulting string's length so one long selection can never
+-- bloat a book's wordreview_history.lua.
+local WORD_REVIEW_CONTEXT_MAX_CHARS = 300
+-- Wider word budget used purely as a search window for the sentence-
+-- boundary trimming getSelectionContext performs below: enough words on
+-- each side to comfortably reach the previous/next sentence boundary even
+-- around long sentences, while the trimming itself (not this constant)
+-- decides where the returned context actually starts/ends.
+local WORD_REVIEW_CONTEXT_SEARCH_WORDS = 40
+
+-- The small menu can show at most 3 buttons at once (see docs/feature
+-- request #6); if the user enables more than that in settings, they must
+-- also choose which 3 (and in what order) actually show.
+local SMALL_MENU_MAX_BUTTONS = 3
+local SMALL_MENU_DEFAULT_BUTTONS = {
+	SMALL_MENU_ACTION_HIGHLIGHT,
+	SMALL_MENU_ACTION_ADD_NOTE,
+	SMALL_MENU_ACTION_WORD_REVIEW,
+}
+
 -- Text-fallback footer buttons (used when no icon file is available) show
 -- only the capitalized first letter of the label by default, so they always
 -- fit the narrow button width regardless of translation length (e.g.
@@ -1057,6 +1118,111 @@ local PLUGIN_ICON_CANDIDATES = {
 
 local function trim(text)
 	return tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+-- Compact header for a dictionary card: a single word/short selection is
+-- shown in full, but anything longer (e.g. a whole selected paragraph) is
+-- cut down to just its first two words followed by "...", so the header
+-- always stays a single short line regardless of how much text was
+-- selected. Examples: "The Count...", "Once upon...".
+local function truncateHeaderText(text)
+	text = trim(text)
+	if text == "" then
+		return text
+	end
+
+	local tokens = {}
+	for token in text:gmatch("%S+") do
+		table.insert(tokens, token)
+		if #tokens >= 3 then
+			break -- only ever need to know "more than 2" plus the first 2
+		end
+	end
+
+	if #tokens <= 2 then
+		return text
+	end
+
+	return tokens[1] .. " " .. tokens[2] .. "..."
+end
+
+-- Kobo-style selection classification -----------------------------------
+--
+-- Kobo's own e-reader dictionary shows the definition popup directly when
+-- the user selects a single word (or a hyphenated/compound word, still one
+-- token), but falls back to a "Highlight / Add Note / Search" context menu
+-- the moment the selection spans more than one word. This counts the
+-- whitespace-separated tokens in the *raw selected text* (not the resolved
+-- dictionary headword) to replicate that exact split: hyphenated compounds
+-- like "well-known" stay a single token since they contain no whitespace.
+--
+-- Punctuation-only artifacts around a genuinely single selected word (a
+-- trailing period from "end of sentence.", an opening quote, etc.) must not
+-- accidentally count as a second "word", so tokens are stripped of leading/
+-- trailing punctuation before being counted, and any token that ends up
+-- empty after stripping is discarded rather than counted.
+local function countSelectionWords(text)
+	text = trim(text)
+	if text == "" then
+		return 0
+	end
+
+	local count = 0
+	for token in text:gmatch("%S+") do
+		local stripped = token:gsub("^[%p]+", ""):gsub("[%p]+$", "")
+		if stripped ~= "" then
+			count = count + 1
+		end
+	end
+
+	return count
+end
+
+-- true when the given selection should be treated as a Kobo-style "phrase"
+-- (2+ words) rather than a single dictionary-lookup word.
+local function isPhraseSelection(text)
+	return countSelectionWords(text) > 1
+end
+
+-- Decides whether a floating card anchored to the selection should float
+-- near the top of the screen instead of the bottom. This matters when the
+-- highlighted selection sits in the lower part of the screen: a
+-- bottom-anchored card would land right on top of the very text the user
+-- just selected. Used both by the dictionary definition popup and by
+-- FloatingActionMenu (the Highlight/Add Note card for a phrase selection),
+-- which anchors to the *opposite* edge from whichever edge this returns for
+-- the dictionary card, so the two never overlap.
+--
+-- Lives here, next to isPhraseSelection/countSelectionWords, rather than
+-- near where it's actually consumed further down the file: it only depends
+-- on Screen (already a module-level local at the very top of the file), and
+-- showFloatingActionMenuForSelection -- defined well above showPreview --
+-- already needs to call it. A Lua `local function` is only visible after its
+-- own declaration, so it has to sit above every call site, not just above
+-- the one (showPreview) it originally shipped next to.
+local function shouldAnchorTop(boxes)
+	if type(boxes) ~= "table" or #boxes == 0 then
+		return false
+	end
+
+	local selection_bottom
+	for _, box in ipairs(boxes) do
+		if type(box) == "table" and box.y and box.h then
+			local box_bottom = box.y + box.h
+			if not selection_bottom or box_bottom > selection_bottom then
+				selection_bottom = box_bottom
+			end
+		end
+	end
+
+	if not selection_bottom then
+		return false
+	end
+
+	-- If the selection's lowest edge is already past the screen midpoint,
+	-- a bottom-anchored card (which sits in that same lower half) would
+	-- very likely cover it. Anchor to the top instead in that case.
+	return selection_bottom > (Screen:getHeight() / 2)
 end
 
 local function fileExists(path)
@@ -1606,6 +1772,21 @@ end
 -- Preview popup --------------------------------------------------------------
 
 local FloatingDictionaryPopup = InputContainer:extend({
+	-- KOReader's UIManager:sendEvent only ever delivers a gesture event to
+	-- the single topmost window in the stack, PLUS any widget flagged
+	-- is_always_active (checked next, top to bottom) -- everything else
+	-- never sees the event at all, no matter what the topmost widget's own
+	-- handler returns. Since FloatingActionMenu (the small "Highlight / Add
+	-- Note" style menu) is shown as its own separate top-level window
+	-- *above* this one whenever it's visible, this dictionary card would
+	-- otherwise never receive swipe-to-change-dictionary or
+	-- hold-to-select-text gestures while that menu is open. Flagging this
+	-- is_always_active is the mechanism KOReader itself provides for
+	-- exactly this ("listen for events even when not on top"; see e.g.
+	-- VirtualKeyboard) and has no effect at all in the common case where
+	-- this popup already IS the topmost window (it's handled on the first,
+	-- normal pass then, before this flag would ever come into play).
+	is_always_active = true,
 	html_body = nil,
 	css = nil,
 	html_resource_directory = nil,
@@ -2476,6 +2657,370 @@ function FloatingDictionaryButtonSettingsPopup:onSwipePage(_arg, ges)
 	return self.on_swipe(ges.direction)
 end
 
+-- FloatingActionMenu -----------------------------------------------------
+-- Kobo-style "Highlight / Add Note" card shown alongside the dictionary
+-- definition popup for a selection. Positioned right against the selection
+-- itself -- just above it or just below it (see anchor_top, decided as the
+-- edge *opposite* wherever the dictionary card ends up, via shouldAnchorTop)
+-- -- horizontally centered on the selection's own bounding box (clamped to
+-- stay fully on screen), rather than floating at the screen edge like the
+-- full-width dictionary card does. This matches the look of KOReader's own
+-- native "Highlight / Add Note / Search" prompt (ReaderHighlight
+-- :showHighlightPrompt): a compact box that hugs the selected text, italic
+-- centered labels, a thin separator line between rows.
+--
+-- Still reuses this file's shared style tokens rather than hardcoding new
+-- ones -- the same getPopupStyleLayout() constants (border thickness/color,
+-- radius, separator color, outer screen margin), the same FrameContainer
+-- card shape, the same FloatingDictAnim.animateShow/animateClose wipe
+-- transition, and the same PreviewButton widget every other button row in
+-- this file already uses -- so it still reads as part of the same coherent
+-- UI, just positioned the way the native prompt is instead of as an
+-- edge-to-edge bar.
+local FloatingActionMenu = InputContainer:extend({
+	actions = nil, -- ordered list of { text = "...", callback = function() ... end }
+	anchor_top = false, -- true floats above the selection; false (default) floats below it
+	boxes = nil, -- selection boxes (screen-space, same shape showDict/onLookupWord receive), used to hug the card to the actual selection instead of a screen edge
+	close_callback = nil,
+	plugin = nil, -- the owning FloatingDictionary instance; used to (a) read the dictionary's own font, and (b) find the dictionary card's current dimen so taps over it aren't swallowed and this menu never overlaps it unnecessarily
+	style_id = nil, -- popup presentation style id; see getPopupStyleLayout
+	border_thickness = nil, -- falls back to POPUP_BORDER_THICKNESS_DEFAULT
+	border_color = nil, -- falls back to POPUP_BORDER_DARKNESS_DEFAULT's color
+	font_size = nil, -- falls back to UI_FONT_SIZE; normally the dictionary's own getPopupFontSize()
+})
+
+function FloatingActionMenu:init()
+	local layout = getPopupStyleLayout(self.style_id)
+	local screen_width = Screen:getWidth()
+	local screen_height = Screen:getHeight()
+
+	if Device:isTouchDevice() then
+		local range = Geom:new({ x = 0, y = 0, w = screen_width, h = screen_height })
+		self.ges_events = {
+			TapClose = { GestureRange:new({ ges = "tap", range = range }) },
+			-- This menu never itself responds to swipe/hold -- it's a
+			-- static list of buttons, not a paginated or text-selectable
+			-- widget. These are registered ANYWAY (rather than left
+			-- unregistered) and always immediately return false (see
+			-- onSwipeFollow/onHoldPassthrough below): leaving them
+			-- unregistered was not enough to keep them from being
+			-- swallowed by this menu's own full-screen tap range, which is
+			-- exactly what broke swipe-to-change-dictionary and
+			-- hold-to-select-text inside the dictionary card underneath.
+			-- Explicitly registering + explicitly returning false is the
+			-- reliable way to guarantee the event keeps propagating down
+			-- to that dictionary popup instead.
+			SwipeFollow = { GestureRange:new({ ges = "swipe", range = range }) },
+			HoldStartText = { GestureRange:new({ ges = "hold", range = range }) },
+			HoldPanText = { GestureRange:new({ ges = "hold_pan", range = range }) },
+			HoldReleaseText = { GestureRange:new({ ges = "hold_release", range = range }) },
+		}
+	end
+
+	if Device:hasKeys() then
+		self.key_events = {
+			Close = { { Device.input.group.Back } },
+		}
+	end
+
+	local edge_margin = layout.card_outer_bottom_margin
+	local border_thickness = self.border_thickness or POPUP_BORDER_THICKNESS_DEFAULT
+	local border_color = self.border_color or Blitbuffer.Color8(math.floor((1 - POPUP_BORDER_DARKNESS_DEFAULT) * 255 + 0.5))
+	local font_size = self.font_size or UI_FONT_SIZE
+	local row_height = Screen:scaleBySize(46 * (font_size / UI_FONT_SIZE) * (layout.button_height_scale or 1))
+	-- Small horizontal margin only, on top of the padding PreviewButton
+	-- already bakes into label_width below -- this menu should hug the
+	-- longest label (e.g. "Highlight") rather than pad it out with extra
+	-- empty space on either side.
+	local row_padding_h = Screen:scaleBySize(4) -- inside the card, left/right of each label
+	-- Only a small safety floor (not a target width): this menu is meant to
+	-- hug the longest button label, not pad every row out to some fixed
+	-- minimum width -- a big min_row_width was exactly what left noticeable
+	-- empty space on either side of short labels like "Note" or "Save".
+	local min_row_width = Screen:scaleBySize(56)
+	local max_card_width = math.floor(screen_width * 0.62) -- never grows into a full-width bar
+
+	-- Same font (family + size) the dictionary card itself uses -- see
+	-- getDocFontFace, used identically by buildPreviewPayload for the
+	-- dictionary's own text -- so the two cards always stay visually in
+	-- sync with no separate font setting of their own.
+	local face = getDocFontFace(self.plugin, font_size)
+
+	-- Size the card to its own content (longest label) rather than
+	-- stretching edge to edge: measure each label once, up front, so every
+	-- row shares one common width and the separator lines line up exactly
+	-- with the card's inner edges.
+	--
+	-- PreviewButton subtracts its OWN internal padding (Size.padding.button
+	-- on each side) from whatever width it's given to compute the label's
+	-- max_width -- so sizing the row to exactly label_width left no room
+	-- for that padding, and the longest label's own button ended up
+	-- clipping its own text with an ellipsis. Add that padding back (plus a
+	-- little extra breathing room) here so the measured width and the
+	-- button's actual available text width always agree.
+	local label_width = 0
+	for _, action in ipairs(self.actions or {}) do
+		local probe = TextWidget:new({ text = action.text or "", face = face })
+		local w = probe:getSize().w or 0
+		probe:free()
+		if w > label_width then
+			label_width = w
+		end
+	end
+	label_width = label_width + 2 * Size.padding.button + Screen:scaleBySize(2)
+
+	local row_width = math.max(min_row_width, label_width)
+	row_width = math.min(row_width, max_card_width - 2 * row_padding_h - 2 * border_thickness)
+
+	-- Full inner width of the card (everything inside the border, including
+	-- the horizontal margin around each button) -- separators span exactly
+	-- this width, so they touch the left/right border on both ends instead
+	-- of stopping short of it the way they would if they only spanned the
+	-- narrower button width.
+	local full_row_width = row_width + 2 * row_padding_h
+
+	local rows = {}
+	for index, action in ipairs(self.actions or {}) do
+		if index > 1 then
+			-- Same thickness as the card's own outer border (not the
+			-- thinner shared button_row_separator_width the full-width
+			-- dictionary popup uses) and spanning the full card width
+			-- edge-to-edge, so the menu reads as one integrated piece
+			-- rather than a border with shorter internal rules.
+			table.insert(rows, LineWidget:new({
+				background = border_color,
+				dimen = Geom:new({ w = full_row_width, h = border_thickness }),
+			}))
+		end
+		local button = PreviewButton:new({
+			text = action.text,
+			face = face,
+			align = "center", -- centered label, like the native prompt's rows
+			bold = false,
+			width = row_width,
+			height = row_height,
+			show_parent = self,
+			callback = action.callback,
+		})
+		-- The horizontal margin around the button now lives here, on the
+		-- row itself, instead of as padding on the outer FrameContainer --
+		-- that's what lets the separator LineWidget above span the full
+		-- card width while the button underneath it still keeps its own
+		-- small inset.
+		table.insert(rows, HorizontalGroup:new({
+			HorizontalSpan:new({ width = row_padding_h }),
+			button,
+			HorizontalSpan:new({ width = row_padding_h }),
+		}))
+	end
+
+	self.card = FrameContainer:new({
+		background = Blitbuffer.COLOR_WHITE,
+		bordersize = border_thickness,
+		color = border_color,
+		radius = layout.card_radius,
+		padding_left = 0,
+		padding_right = 0,
+		padding_top = 0,
+		padding_bottom = 0,
+		VerticalGroup:new(rows),
+	})
+
+	local card_size = self.card:getSize()
+	local card_w = card_size.w or 0
+	local card_h = card_size.h or 0
+	local screen_margin = layout.card_outer_side_margin
+
+	-- Bounding box of the actual selection, in screen coordinates (same
+	-- boxes showDict/onLookupWord receive): lets the card hug the selection
+	-- itself -- just above or just below it -- instead of floating all the
+	-- way at the screen edge like the full-width dictionary card does.
+	local sel_left, sel_right, sel_top, sel_bottom
+	for _, box in ipairs(self.boxes or {}) do
+		if type(box) == "table" and box.x and box.y and box.w and box.h then
+			local x0, x1 = box.x, box.x + box.w
+			local y0, y1 = box.y, box.y + box.h
+			sel_left = sel_left and math.min(sel_left, x0) or x0
+			sel_right = sel_right and math.max(sel_right, x1) or x1
+			sel_top = sel_top and math.min(sel_top, y0) or y0
+			sel_bottom = sel_bottom and math.max(sel_bottom, y1) or y1
+		end
+	end
+
+	-- The dictionary card's own current on-screen rectangle, when available,
+	-- so tier 2/3 below can avoid actually overlapping it ("sin
+	-- reemplazarlo"). Not always present (e.g. very first paint before the
+	-- dictionary card has ever been drawn), in which case every dict-overlap
+	-- check below simply treats it as "no dictionary to avoid".
+	local dict_popup = self.plugin and self.plugin.current_popup
+	local dict_dimen = dict_popup and dict_popup.container and dict_popup.container.dimen
+
+	local function overlapsDict(y)
+		if not dict_dimen then
+			return false
+		end
+		local card_top, card_bottom = y, y + card_h
+		local dict_top, dict_bottom = dict_dimen.y, dict_dimen.y + dict_dimen.h
+		return card_top < dict_bottom and card_bottom > dict_top
+	end
+
+	local target_x, target_y
+	if sel_left and sel_right and sel_top and sel_bottom then
+		-- Hugging gap between the card and the selection -- small on
+		-- purpose, so the card reads as pointing at the selection rather
+		-- than floating independently of it.
+		local gap = Screen:scaleBySize(8)
+
+		target_x = sel_left + (sel_right - sel_left) / 2 - card_w / 2
+		target_x = math.max(screen_margin, math.min(target_x, screen_width - card_w - screen_margin))
+
+		-- Positioning priority (see feature request #4):
+		--   1. Opposite side from the dictionary (the normal case).
+		--   2. Same side as the dictionary, stacked next to its card
+		--      instead of overlapping it.
+		--   3. Overlap the selection itself, but stay fully on screen.
+		--   4. Centered on the selection, as an absolute last resort.
+		local top_candidate = sel_top - gap - card_h
+		local bottom_candidate = sel_bottom + gap
+		local fits_top = top_candidate >= screen_margin
+		local fits_bottom = (bottom_candidate + card_h) <= (screen_height - screen_margin)
+
+		if self.anchor_top and fits_top and not overlapsDict(top_candidate) then
+			-- Tier 1, anchored top.
+			target_y = top_candidate
+		elseif not self.anchor_top and fits_bottom and not overlapsDict(bottom_candidate) then
+			-- Tier 1, anchored bottom.
+			target_y = bottom_candidate
+		else
+			-- Tier 2: try the dictionary's own side instead, stacked flush
+			-- against its card rather than on top of it.
+			local same_side_candidate = self.anchor_top and bottom_candidate or top_candidate
+
+			if overlapsDict(same_side_candidate) then
+				if same_side_candidate < dict_dimen.y then
+					same_side_candidate = dict_dimen.y - gap - card_h
+				else
+					same_side_candidate = dict_dimen.y + dict_dimen.h + gap
+				end
+			end
+
+			local same_side_fits = same_side_candidate >= screen_margin
+				and (same_side_candidate + card_h) <= (screen_height - screen_margin)
+				and not overlapsDict(same_side_candidate)
+
+			if same_side_fits then
+				target_y = same_side_candidate
+			else
+				-- Tier 3: no side has room without either running off
+				-- screen or replacing the dictionary card -- allow
+				-- overlapping the selection itself instead, clamped fully
+				-- on screen (this is what "superponerse parcialmente" means
+				-- here: the card stays whole and visible, just possibly
+				-- over the highlighted text).
+				target_y = self.anchor_top and top_candidate or bottom_candidate
+				target_y = math.max(screen_margin, math.min(target_y, screen_height - card_h - screen_margin))
+
+				-- Tier 4: even a fully on-screen position isn't enough room
+				-- (card taller than the whole usable screen height, an
+				-- extreme edge case) -- center directly on the selection.
+				if card_h > (screen_height - 2 * screen_margin) then
+					target_y = sel_top + (sel_bottom - sel_top) / 2 - card_h / 2
+					target_y = math.max(screen_margin, math.min(target_y, screen_height - card_h - screen_margin))
+				end
+			end
+		end
+	else
+		-- No usable selection boxes (shouldn't normally happen, but keep a
+		-- safe fallback): behave like before, anchored near the screen edge
+		-- opposite whichever edge_margin gives, centered horizontally.
+		target_x = math.max(screen_margin, (screen_width - card_w) / 2)
+		target_y = self.anchor_top and edge_margin or (screen_height - card_h - edge_margin)
+	end
+
+	self[1] = VerticalGroup:new({
+		VerticalSpan:new({ width = math.floor(target_y) }),
+		HorizontalGroup:new({
+			HorizontalSpan:new({ width = math.floor(target_x) }),
+			self.card,
+		}),
+	})
+end
+
+function FloatingActionMenu:onShow()
+	UIManager:setDirty(self, function()
+		return "ui", self.card.dimen
+	end)
+end
+
+
+function FloatingActionMenu:onCloseWidget()
+	UIManager:setDirty(self, function()
+		return "partial", self.card.dimen
+	end)
+end
+
+function FloatingActionMenu:onClose()
+	UIManager:close(self)
+	if self.close_callback then
+		return self.close_callback()
+	end
+	return true
+end
+
+-- Always let swipe/hold gestures fall straight through to whatever's
+-- underneath -- normally the dictionary card's own swipe-to-change-
+-- dictionary gesture, or its hold-to-select-text-for-lookup gesture. This
+-- menu never has a use for any of these itself.
+function FloatingActionMenu:onSwipeFollow(_arg, _ges)
+	return false
+end
+
+function FloatingActionMenu:onHoldStartText(_arg, _ges)
+	return false
+end
+
+function FloatingActionMenu:onHoldPanText(_arg, _ges)
+	return false
+end
+
+function FloatingActionMenu:onHoldReleaseText(_arg, _ges)
+	return false
+end
+
+-- Tap-outside-to-close, but careful never to swallow a tap meant for the
+-- dictionary card shown alongside this menu (see feature request #2): a tap
+-- lands in exactly one of three places, and only the third one is ours to
+-- consume.
+function FloatingActionMenu:onTapClose(_arg, ges)
+	if not (ges and ges.pos) then
+		return false
+	end
+
+	-- 1. Tap landed on our own card (one of its buttons): let it fall
+	-- through to the button's own tap handling.
+	if self.card and self.card.dimen and not ges.pos:notIntersectWith(self.card.dimen) then
+		return false
+	end
+
+	-- 2. Tap landed on the dictionary card shown alongside this menu (its
+	-- own buttons, swipe-to-change-dictionary zone, etc.): never swallow
+	-- that here. Returning false lets it propagate down to the dictionary
+	-- popup underneath, which handles it itself -- this is what keeps the
+	-- dictionary fully interactive while this menu is still open, instead
+	-- of this menu's full-screen catch-all eating every tap not meant for
+	-- it.
+	local dict_popup = self.plugin and self.plugin.current_popup
+	local dict_dimen = dict_popup and dict_popup.container and dict_popup.container.dimen
+	if dict_dimen and not ges.pos:notIntersectWith(dict_dimen) then
+		return false
+	end
+
+	-- 3. Truly outside both boxes: close this menu (and only this menu --
+	-- consuming the event here means a *separate*, later tap is needed to
+	-- also close the dictionary, exactly the requested close order).
+	return self:onClose()
+end
+
 -- Plugin lifecycle -----------------------------------------------------------
 
 function FloatingDictionary:init()
@@ -2492,6 +3037,7 @@ function FloatingDictionary:init()
 	self.close_review_popup = nil
 	self._suspended = false
 	self.pending_word_review_task = nil
+	self.action_menu_popup = nil -- currently shown FloatingActionMenu (Highlight/Add Note card for a phrase selection), if any
 
 	-- Cascade state: ordered list of frames { word, results, boxes, link,
 	-- dict_close_callback } representing the trail of lookups in the current
@@ -2514,9 +3060,18 @@ function FloatingDictionary:init()
 		self.ui.menu:registerToMainMenu(self)
 	end
 
-	self:patchDictionary()
-	self:patchFastDict()
-	self:patchHighlightMenu()
+	-- Everything below assumes a real reader session (self.ui.document,
+	-- self.ui.dictionary, self.ui.highlight, ...); none of that exists when
+	-- this plugin is loaded docless from the file browser (item 16), so it
+	-- is skipped entirely in that case -- the docless menu built by
+	-- addToMainMenu below only ever calls into WordReview, which already
+	-- tolerates a nil/missing document.
+	if self.ui and self.ui.document then
+		self:patchDictionary()
+		self:patchFastDict()
+		self:patchHighlightMenu()
+		self:patchHoldRelease()
+	end
 end
 
 -- Fired once by KOReader after a document has finished loading and the
@@ -2639,173 +3194,268 @@ function FloatingDictionary:scheduleWordReview(is_resume)
 end
 
 function FloatingDictionary:addToMainMenu(menu_items)
+	if not (self.ui and self.ui.document) then
+		-- Docless (file browser) context: a much simpler menu than the full
+		-- reader one below -- just the two entries requested, both opening
+		-- the same Word Review screen (which, with no book open, only shows
+		-- the All/Mastered tabs -- see WordReview:showManageWordsScreen).
+		--
+		-- text_func (not a static text string) so this label re-translates
+		-- live on every menu open, the same way the sub_item_table_func
+		-- submenus below already do -- addToMainMenu itself only runs once
+		-- per reading session, so a plain `text = _(...)` would freeze on
+		-- whatever language was active the first time the menu was built,
+		-- even after switching languages from the settings menu.
+		menu_items.floatingdictionary = {
+			text_func = function() return _("Word Review") end,
+			sorting_hint = "setting",
+			keep_menu_open = true,
+			callback = function()
+				WordReview:showManageWordsScreen(self)
+			end,
+		}
+		return
+	end
+
+	-- Every label below uses text_func rather than a static text string for
+	-- the same reason as the docless branch above: addToMainMenu builds
+	-- this table once per session, so only text_func (re-evaluated live by
+	-- the Menu widget on every open) keeps these labels in sync with the
+	-- language the user currently has selected -- the same approach already
+	-- used by each sub_item_table_func submenu's own dynamic entries (e.g.
+	-- the "Language: %1" row in genAppearanceMenu).
 	menu_items.floatingdictionary = {
-		text = _("Floating Dictionary"),
+		text_func = function() return _("Floating Dictionary") end,
 		sorting_hint = "setting",
 		sub_item_table = {
 			{
-				text = _("Enable Floating Dictionary"),
+				text_func = function() return _("Enable Floating Dictionary") end,
 				checked_func = function()
 					return self:isPreviewEnabled()
 				end,
 				callback = function()
 					self:setPreviewEnabled(not self:isPreviewEnabled())
 				end,
-			},
-			{
-				text_func = function()
-					for _idx, lang in ipairs(L10n.AVAILABLE_LANGUAGES) do
-						if lang.code == L10n.getLanguage() then
-							return T(_("Language: %1"), lang.name)
-						end
-					end
-					return _("Language")
-				end,
-				sub_item_table_func = function()
-					return self:genLanguageMenu()
-				end,
 				separator = true,
 			},
 			{
-				text_func = function()
-					local override = self:getFontFamilyOverride()
-					if override then
-						return T(_("Preview font: %1"), override)
+				text_func = function() return _("Appearance") end,
+				sub_item_table_func = function()
+					return self:genAppearanceMenu()
+				end,
+			},
+			{
+				text_func = function() return _("Dictionary") end,
+				sub_item_table_func = function()
+					return self:genDictionaryMenu()
+				end,
+			},
+			{
+				text_func = function() return _("Context menu") end,
+				sub_item_table_func = function()
+					return self:genContextMenuSettingsMenu()
+				end,
+			},
+			{
+				text_func = function() return _("Word Review") end,
+				sub_item_table_func = function()
+					return WordReview:genMenu(self)
+				end,
+			},
+		},
+	}
+end
+
+-- Settings menu, reorganized into logical groups -------------------------
+--
+-- The flat list of settings this plugin has accumulated over time is
+-- regrouped here into a handful of named submenus (Appearance, Dictionary,
+-- Context menu, Word Review) so a user can find any one setting without
+-- scanning through everything else -- no settings were added, removed, or
+-- had their behavior changed; only where they live in the menu changed.
+-- "Enable Floating Dictionary" and "Word Review" are left at the top level
+-- (see addToMainMenu above): the former is the plugin's master on/off
+-- switch and the latter is already its own self-contained group (see
+-- WordReview:genMenu), so neither benefits from being nested one level
+-- deeper.
+
+-- Appearance: everything about how the popup/card itself looks -- preview
+-- language, fonts, colors/borders, card size, display mode/style, the
+-- highlight styles it absorbed from KOReader's own Highlights menu, and
+-- the card transition animation toggle.
+function FloatingDictionary:genAppearanceMenu()
+	return {
+		{
+			text_func = function()
+				for _idx, lang in ipairs(L10n.AVAILABLE_LANGUAGES) do
+					if lang.code == L10n.getLanguage() then
+						return T(_("Language: %1"), lang.name)
 					end
-					return _("Preview font")
-				end,
-				sub_item_table_func = function()
-					return self:genFontFamilyMenu()
-				end,
-			},
-			{
-				text_func = function()
-					local percent = math.floor(self:getCardHeightRatio() * 100 + 0.5)
-					return T(_("Card height: %1 % of screen"), percent)
-				end,
-				keep_menu_open = true,
-				callback = function(touchmenu_instance)
-					self:showCardHeightDialog(touchmenu_instance)
-				end,
-			},
-			{
-				text_func = function()
-					return T(_("Popup font size: %1"), self:getPopupFontSize())
-				end,
-				keep_menu_open = true,
-				callback = function(touchmenu_instance)
-					self:showPopupFontSizeDialog(touchmenu_instance)
-				end,
-			},
-			{
-				text_func = function()
-					return T(_("Popup border thickness: %1"), self:getPopupBorderThickness())
-				end,
-				keep_menu_open = true,
-				callback = function(touchmenu_instance)
-					self:showPopupBorderThicknessDialog(touchmenu_instance)
-				end,
-			},
-			{
-				text_func = function()
-					local percent = math.floor(self:getPopupBorderDarkness() * 100 + 0.5)
-					return T(_("Popup border darkness: %1 %"), percent)
-				end,
-				keep_menu_open = true,
-				callback = function(touchmenu_instance)
-					self:showPopupBorderDarknessDialog(touchmenu_instance)
-				end,
-			},
-			{
-				text_func = function()
-					for _idx, display_mode in ipairs(DISPLAY_MODES) do
-						if display_mode.id == self:getDisplayMode() then
-							return T(_("Display mode: %1"), display_mode.text)
-						end
+				end
+				return _("Language")
+			end,
+			sub_item_table_func = function()
+				return self:genLanguageMenu()
+			end,
+			separator = true,
+		},
+		{
+			text_func = function()
+				local override = self:getFontFamilyOverride()
+				if override then
+					return T(_("Preview font: %1"), override)
+				end
+				return _("Preview font")
+			end,
+			sub_item_table_func = function()
+				return self:genFontFamilyMenu()
+			end,
+		},
+		{
+			text_func = function()
+				for _idx, display_mode in ipairs(DISPLAY_MODES) do
+					if display_mode.id == self:getDisplayMode() then
+						return T(_("Display mode: %1"), display_mode.text)
 					end
-					return _("Display mode")
-				end,
-				sub_item_table_func = function()
-					return self:genDisplayModeMenu()
-				end,
-			},
-			{
-				text_func = function()
-					for _idx, style in ipairs(POPUP_STYLES) do
-						if style.id == self:getPopupStyle() then
-							return T(_("Popup style: %1"), style.text)
-						end
+				end
+				return _("Display mode")
+			end,
+			sub_item_table_func = function()
+				return self:genDisplayModeMenu()
+			end,
+		},
+		{
+			text_func = function()
+				for _idx, style in ipairs(POPUP_STYLES) do
+					if style.id == self:getPopupStyle() then
+						return T(_("Popup style: %1"), style.text)
 					end
-					return _("Popup style")
-				end,
-				sub_item_table_func = function()
-					return self:genPopupStyleMenu()
-				end,
-				separator = true,
-			},
-			{
-				text = _("Buttons shown in preview"),
-				sub_item_table_func = function()
-					return self:genVisibleActionsMenu()
-				end,
-			},
-			{
-				text = _("Dictionary order"),
-				sub_item_table_func = function()
-					return self:genDictionaryOrderMenu()
-				end,
-			},
-			{
-				text = _("Word Review"),
-				sub_item_table_func = function()
-					return WordReview:genMenu()
-				end,
-			},
-			{
-				-- Absorbs KOReader's own "Highlights" menu (style, color,
-				-- gray opacity, line height, note marker, "apply to all",
-				-- and the PDF write-in toggle) so it lives inside Floating
-				-- Dictionary instead of appearing as its own top-level menu.
-				-- native_highlight_sub_items (captured below, right after
-				-- this table literal) holds the actual sub_item_table that
-				-- ReaderHighlight:addToMainMenu() built, so this still works
-				-- correctly however the value in menu_items is disposed of
-				-- afterwards.
-				text = _("Highlight styles"),
-				sub_item_table_func = function()
-					return self:genMergedHighlightStylesMenu()
-				end,
-			},
-			{
-				text = _("Show buttons from other dictionary plugins"),
-				checked_func = function()
-					return self:isShowExternalButtonsEnabled()
-				end,
-				callback = function()
-					self:setShowExternalButtonsEnabled(not self:isShowExternalButtonsEnabled())
-				end,
-			},
-			{
-				text = _("Enable card transition animations"),
-				checked_func = function()
-					return self:areAnimationsEnabled()
-				end,
-				callback = function()
-					self:setAnimationsEnabled(not self:areAnimationsEnabled())
-				end,
-				separator = true,
-			},
-			{
-				text_func = function()
-					if self:isFastDictEnabled() then
-						return _("Fast lookups (FastDict): on")
-					end
-					return _("Fast lookups (FastDict): off")
-				end,
-				sub_item_table_func = function()
-					return self:genFastDictMenu()
-				end,
-			},
+				end
+				return _("Popup style")
+			end,
+			sub_item_table_func = function()
+				return self:genPopupStyleMenu()
+			end,
+			separator = true,
+		},
+		{
+			text_func = function()
+				local percent = math.floor(self:getCardHeightRatio() * 100 + 0.5)
+				return T(_("Card height: %1 % of screen"), percent)
+			end,
+			keep_menu_open = true,
+			callback = function(touchmenu_instance)
+				self:showCardHeightDialog(touchmenu_instance)
+			end,
+		},
+		{
+			text_func = function()
+				return T(_("Popup font size: %1"), self:getPopupFontSize())
+			end,
+			keep_menu_open = true,
+			callback = function(touchmenu_instance)
+				self:showPopupFontSizeDialog(touchmenu_instance)
+			end,
+		},
+		{
+			text_func = function()
+				return T(_("Popup border thickness: %1"), self:getPopupBorderThickness())
+			end,
+			keep_menu_open = true,
+			callback = function(touchmenu_instance)
+				self:showPopupBorderThicknessDialog(touchmenu_instance)
+			end,
+		},
+		{
+			text_func = function()
+				local percent = math.floor(self:getPopupBorderDarkness() * 100 + 0.5)
+				return T(_("Popup border darkness: %1 %"), percent)
+			end,
+			keep_menu_open = true,
+			callback = function(touchmenu_instance)
+				self:showPopupBorderDarknessDialog(touchmenu_instance)
+			end,
+			separator = true,
+		},
+		{
+			-- Absorbs KOReader's own "Highlights" menu (style, color,
+			-- gray opacity, line height, note marker, "apply to all",
+			-- and the PDF write-in toggle) so it lives inside Floating
+			-- Dictionary instead of appearing as its own top-level menu.
+			-- self.native_highlight_sub_items (captured elsewhere, see
+			-- genMergedHighlightStylesMenu below) holds the actual
+			-- sub_item_table that ReaderHighlight:addToMainMenu() built,
+			-- so this still works correctly regardless of where in this
+			-- plugin's own menu the entry itself lives.
+			text = _("Highlight styles"),
+			sub_item_table_func = function()
+				return self:genMergedHighlightStylesMenu()
+			end,
+		},
+		{
+			text = _("Enable card transition animations"),
+			checked_func = function()
+				return self:areAnimationsEnabled()
+			end,
+			callback = function()
+				self:setAnimationsEnabled(not self:areAnimationsEnabled())
+			end,
+		},
+	}
+end
+
+-- Dictionary: the lookup engine itself -- which installed dictionaries are
+-- consulted and in what order, plus the FastDict fast-lookup toggle.
+function FloatingDictionary:genDictionaryMenu()
+	return {
+		{
+			text = _("Dictionary order"),
+			sub_item_table_func = function()
+				return self:genDictionaryOrderMenu()
+			end,
+			separator = true,
+		},
+		{
+			text_func = function()
+				if self:isFastDictEnabled() then
+					return _("Fast lookups (FastDict): on")
+				end
+				return _("Fast lookups (FastDict): off")
+			end,
+			sub_item_table_func = function()
+				return self:genFastDictMenu()
+			end,
+		},
+	}
+end
+
+-- Context menu: the small action menu shown on text selection -- which
+-- buttons it offers, which of those show in the floating preview footer,
+-- and whether other installed dictionary plugins may also add their own
+-- buttons there.
+function FloatingDictionary:genContextMenuSettingsMenu()
+	return {
+		{
+			text = _("Buttons shown in preview"),
+			sub_item_table_func = function()
+				return self:genVisibleActionsMenu()
+			end,
+		},
+		{
+			text = _("Small menu buttons"),
+			sub_item_table_func = function()
+				return self:genSmallMenuButtonsMenu()
+			end,
+			separator = true,
+		},
+		{
+			text = _("Show buttons from other dictionary plugins"),
+			checked_func = function()
+				return self:isShowExternalButtonsEnabled()
+			end,
+			callback = function()
+				self:setShowExternalButtonsEnabled(not self:isShowExternalButtonsEnabled())
+			end,
 		},
 	}
 end
@@ -3516,6 +4166,201 @@ function FloatingDictionary:moveAction(action_id, direction)
 
 	order[current_pos], order[target_pos] = order[target_pos], order[current_pos]
 	self:setActionOrderSetting(order)
+end
+
+-- Small selection menu buttons ------------------------------------------------
+-- Which SMALL_MENU_ACTIONS entries the small "Highlight / Add Note" style
+-- menu shows, and in what order -- capped at SMALL_MENU_MAX_BUTTONS. Falls
+-- back to SMALL_MENU_DEFAULT_BUTTONS the first time (nothing saved yet) and,
+-- same as getActionOrderSetting above, silently drops any id no longer
+-- recognised and any id beyond the 3-button cap, so a saved setting can never
+-- produce more buttons than the menu is allowed to show.
+function FloatingDictionary:getSmallMenuButtonIds()
+	local saved = G_reader_settings:readSetting(SETTING_SMALL_MENU_BUTTONS)
+	local order = {}
+	if type(saved) == "table" then
+		local seen = {}
+		for _, id in ipairs(saved) do
+			if SMALL_MENU_ACTION_BY_ID[id] and not seen[id] and #order < SMALL_MENU_MAX_BUTTONS then
+				seen[id] = true
+				table.insert(order, id)
+			end
+		end
+	end
+
+	if #order == 0 then
+		for _, id in ipairs(SMALL_MENU_DEFAULT_BUTTONS) do
+			table.insert(order, id)
+		end
+	end
+
+	return order
+end
+
+function FloatingDictionary:setSmallMenuButtonIds(order)
+	G_reader_settings:saveSetting(SETTING_SMALL_MENU_BUTTONS, order)
+end
+
+function FloatingDictionary:isSmallMenuButtonEnabled(action_id)
+	for _, id in ipairs(self:getSmallMenuButtonIds()) do
+		if id == action_id then
+			return true
+		end
+	end
+	return false
+end
+
+-- Enables/disables one action, appending newly-enabled ones to the end of
+-- the current order. Refuses to enable a 4th button (returns false plus a
+-- user-facing message) rather than silently dropping one of the existing
+-- three -- the user must free up a slot first, exactly as requested.
+function FloatingDictionary:toggleSmallMenuButton(action_id)
+	local order = self:getSmallMenuButtonIds()
+
+	for pos, id in ipairs(order) do
+		if id == action_id then
+			table.remove(order, pos)
+			self:setSmallMenuButtonIds(order)
+			return true
+		end
+	end
+
+	if #order >= SMALL_MENU_MAX_BUTTONS then
+		return false, T(_("Maximum of %1 buttons. Remove one first."), SMALL_MENU_MAX_BUTTONS)
+	end
+
+	table.insert(order, action_id)
+	self:setSmallMenuButtonIds(order)
+	return true
+end
+
+function FloatingDictionary:moveSmallMenuButton(action_id, direction)
+	local order = self:getSmallMenuButtonIds()
+
+	local current_pos
+	for pos, id in ipairs(order) do
+		if id == action_id then
+			current_pos = pos
+			break
+		end
+	end
+	if not current_pos then
+		return
+	end
+
+	local target_pos = current_pos + direction
+	if target_pos < 1 or target_pos > #order then
+		return
+	end
+
+	order[current_pos], order[target_pos] = order[target_pos], order[current_pos]
+	self:setSmallMenuButtonIds(order)
+end
+
+-- Settings submenu for the small selection menu: a checkbox row per
+-- candidate action (toggle show/hide, capped at 3) plus, for every
+-- currently-enabled one, a small "Move up / Move down / Remove" submenu to
+-- set its order -- mirrors the existing "Buttons shown in preview" UX
+-- (genVisibleActionsMenu) but simplified, since there's no icon config and
+-- no unlimited footer to manage here, only up to 3 plain-text buttons.
+function FloatingDictionary:genSmallMenuButtonsMenu()
+	local items = {}
+
+	table.insert(items, {
+		text = _("Choose up to 3 buttons for the small selection menu (shown when you select text), and set their order."),
+		enabled = false,
+		separator = true,
+	})
+
+	local enabled_order = self:getSmallMenuButtonIds()
+	for pos, action_id in ipairs(enabled_order) do
+		local action = SMALL_MENU_ACTION_BY_ID[action_id]
+		table.insert(items, {
+			text_func = function()
+				return T("%1. %2", pos, action and action.label or action_id)
+			end,
+			keep_menu_open = true,
+			sub_item_table_func = function()
+				local current_order = self:getSmallMenuButtonIds()
+				local current_pos
+				for p, id in ipairs(current_order) do
+					if id == action_id then
+						current_pos = p
+						break
+					end
+				end
+				return {
+					{
+						text = _("Move up"),
+						enabled_func = function()
+							return current_pos and current_pos > 1
+						end,
+						keep_menu_open = true,
+						callback = function(touchmenu_instance)
+							self:moveSmallMenuButton(action_id, -1)
+							if touchmenu_instance then
+								touchmenu_instance.item_table = self:genSmallMenuButtonsMenu()
+								touchmenu_instance:updateItems()
+							end
+						end,
+					},
+					{
+						text = _("Move down"),
+						enabled_func = function()
+							return current_pos and current_pos < #current_order
+						end,
+						keep_menu_open = true,
+						callback = function(touchmenu_instance)
+							self:moveSmallMenuButton(action_id, 1)
+							if touchmenu_instance then
+								touchmenu_instance.item_table = self:genSmallMenuButtonsMenu()
+								touchmenu_instance:updateItems()
+							end
+						end,
+					},
+					{
+						text = _("Remove from small menu"),
+						keep_menu_open = true,
+						callback = function(touchmenu_instance)
+							self:toggleSmallMenuButton(action_id)
+							if touchmenu_instance then
+								touchmenu_instance.item_table = self:genSmallMenuButtonsMenu()
+								touchmenu_instance:updateItems()
+							end
+						end,
+					},
+				}
+			end,
+		})
+	end
+
+	table.insert(items, {
+		text = _("Available buttons"),
+		enabled = false,
+		separator = true,
+	})
+
+	for _, action in ipairs(SMALL_MENU_ACTIONS) do
+		table.insert(items, {
+			text = action.label,
+			checked_func = function()
+				return self:isSmallMenuButtonEnabled(action.id)
+			end,
+			keep_menu_open = true,
+			callback = function(touchmenu_instance)
+				local ok, err = self:toggleSmallMenuButton(action.id)
+				if not ok and err then
+					self:notify(err)
+				end
+				if touchmenu_instance then
+					touchmenu_instance.item_table = self:genSmallMenuButtonsMenu()
+					touchmenu_instance:updateItems()
+				end
+			end,
+		})
+	end
+
+	return items
 end
 
 -- Custom footer button labels ------------------------------------------------
@@ -4622,9 +5467,41 @@ function FloatingDictionary:closeStackTop(invoke_callback)
 	return frame
 end
 
+-- Closes the FloatingActionMenu (Highlight/Add Note card for a phrase
+-- selection), if one is currently shown. Idempotent/safe to call when none
+-- is open. Kept separate from the dictionary popup_stack machinery (it's
+-- never pushed onto/popped off that stack, and never counted as a cascade
+-- frame) since it's a sibling card, not part of the dictionary cascade.
+function FloatingDictionary:closeActionMenu()
+	if self.action_menu_popup then
+		local popup = self.action_menu_popup
+		self.action_menu_popup = nil
+		pcall(function()
+			FloatingDictAnim.animateClose(popup, true)
+		end)
+	end
+end
+
+-- Moves the small action menu back to the very top of the window stack, if
+-- it's currently showing. UIManager:show always inserts a widget above every
+-- other non-modal widget already shown -- so re-showing the SAME (already
+-- open) action menu widget just re-inserts it at the top again, with no
+-- visible change (same widget, same position, same content), while
+-- guaranteeing it keeps receiving taps meant for it instead of silently
+-- ending up buried under a dictionary card shown/rebuilt afterwards.
+function FloatingDictionary:keepActionMenuOnTop()
+	if not self.action_menu_popup then
+		return
+	end
+	pcall(function()
+		UIManager:show(self.action_menu_popup)
+	end)
+end
+
 -- Closes every card in the stack, bottom to top. Used when a brand new
 -- (non-cascaded) lookup starts and should replace the whole trail.
 function FloatingDictionary:closeAllCards(invoke_callbacks)
+	self:closeActionMenu()
 	while self.popup_stack and #self.popup_stack > 0 do
 		self:closeStackTop(invoke_callbacks)
 	end
@@ -4650,6 +5527,7 @@ function FloatingDictionary:popCard()
 end
 
 function FloatingDictionary:destroy()
+	self:closeActionMenu()
 	self:closeAllCards(false)
 	if self.pending_word_review_task then
 		pcall(function()
@@ -4933,29 +5811,80 @@ function FloatingDictionary:patchDictionary()
 
 	dictionary.showDict = function(dict_self, word, results, boxes, link, dict_close_callback)
 		plugin.enabled = plugin:isPreviewEnabled()
-		if not plugin.enabled or plugin.opening_original_popup or not results or not results[1] then
+		if not plugin.enabled or plugin.opening_original_popup then
 			return plugin.original_showDict(dict_self, word, results, boxes, link, dict_close_callback)
 		end
 
-		-- Word review history: recorded here, the single point every real
-		-- dictionary lookup passes through, regardless of which popup ends up
-		-- showing it (floating card below, or the native popup via the
-		-- native_dict_popup_active branch just below) or whether it's a fresh
-		-- lookup or a cascaded cross-reference. Kept a plain best-effort call
-		-- (never blocks or fails the actual lookup) since history bookkeeping
-		-- should never be able to break normal dictionary use.
+		-- Kobo-style selection interception ------------------------------
 		--
-		-- Records the *resolved* dictionary headword (e.g. "sensatez"), not
-		-- the original inflected text the user selected (e.g. "sensata"):
-		-- otherwise a later review would re-search the original form, which
-		-- may not exist as its own dictionary entry, and show no definition.
-		-- See getResolvedLookupWord.
-		local ok_record, err_record = pcall(function()
-			WordReview:recordLookup(plugin, plugin:getResolvedLookupWord(word, results))
-		end)
-		if not ok_record then
-			logger.warn("FloatingDictionary: WordReview:recordLookup failed:", err_record)
+		-- KOReader always routes a hold-release selection through the
+		-- dictionary lookup machinery first (see ReaderHighlight:lookup /
+		-- onHoldRelease upstream), regardless of whether the user selected
+		-- one word or a whole sentence -- it's only here, once showDict is
+		-- called, that this plugin gets a reliable look at what was
+		-- actually selected. That makes showDict the correct interception
+		-- point to show the Highlight/Add Note card: a single-word (or
+		-- single-compound-word) selection still opens the definition
+		-- exactly as before, but now *also* gets the Highlight/Add Note
+		-- card alongside it, same as a multi-word phrase does.
+		--
+		-- IMPORTANT: this check must run *before* the "no results" bail-out
+		-- below. A multi-word phrase very often has no matching dictionary
+		-- headword at all (results is nil/empty), so gating this behind
+		-- "results[1] must exist" meant real phrase selections almost never
+		-- reached this branch -- they fell through to the plain
+		-- original_showDict call instead, which is exactly why the
+		-- Highlight/Add Note menu never appeared for a selected phrase.
+		-- Kobo (and now this plugin) shows that card regardless of whether
+		-- a definition was found, for both a word and a phrase, so the
+		-- check here must not depend on results or on isPhraseSelection at
+		-- all.
+		--
+		-- This only ever applies to *root* selections made by the user's
+		-- own hold-and-drag gesture. Cross-reference lookups triggered by
+		-- tapping a linked word inside an already-open definition (link ~=
+		-- nil) or by a cascade step queued from within this plugin's own
+		-- popups (pending_cascade_step) are never a fresh selection the
+		-- user could highlight/annotate in that sense -- they're always a
+		-- single programmatic word lookup -- so those always skip this
+		-- branch and fall through to the normal flow.
+		--
+		-- Deliberately no `return` here: showFloatingActionMenuForSelection
+		-- shows the Highlight/Add Note card as a side effect and this then
+		-- falls straight through into the normal dictionary flow below, so
+		-- the definition card (if any match exists) and the Highlight/Add
+		-- Note card can both be visible at the same time, anchored to
+		-- opposite edges of the screen.
+		--
+		-- Deferred by a tick rather than called inline: a fresh (non-cascade)
+		-- lookup falls through below into showPreview(), which synchronously
+		-- calls closeAllCards() to clear out any previous cascade -- and
+		-- closeAllCards() also closes action_menu_popup (see closeAllCards
+		-- above). Showing this card inline here meant it got created and then
+		-- immediately closed again in the very same call stack, before ever
+		-- reaching the screen. Scheduling it a tick later guarantees it runs
+		-- after that synchronous closeAllCards() has already happened.
+		local is_root_selection = link == nil and not plugin.pending_cascade_step
+		if is_root_selection and not plugin.native_dict_popup_active then
+			UIManager:scheduleIn(0.05, function()
+				plugin:showFloatingActionMenuForSelection(dict_self, word, boxes, dict_close_callback, results)
+			end)
 		end
+
+		-- No dictionary match for what is (now confirmed) a single-word/
+		-- single-token selection: nothing for the floating preview to show,
+		-- fall back to KOReader's normal handling (which will show its own
+		-- "not found" message or a suggestion list, as appropriate).
+		if not results or not results[1] then
+			return plugin.original_showDict(dict_self, word, results, boxes, link, dict_close_callback)
+		end
+
+		-- Word review history is now recorded ONLY from the small selection
+		-- menu's dedicated "Save for review" button (see
+		-- addSelectionToWordReview / showFloatingActionMenuForSelection
+		-- below), never automatically here on every real lookup. Previously
+		-- this called WordReview:recordLookup on every successful lookup;
+		-- that automatic bookkeeping has been removed on purpose.
 
 		if plugin.native_dict_popup_active then
 			local wrapped_close_callback = plugin:beginNativeDictionaryPopup(dict_close_callback)
@@ -4974,6 +5903,420 @@ function FloatingDictionary:patchDictionary()
 	end
 
 	dictionary._floatingdictionary_patched = true
+end
+
+-- Forces a deterministic, setting-independent outcome for a *phrase* (2+
+-- word) hold-release selection: always route it into the dictionary lookup
+-- machinery (onLookupWord -> showDict), exactly like a single-word
+-- selection already does unconditionally.
+--
+-- Without this patch, ReaderHighlight:onHoldRelease() only calls
+-- onLookupWord for a phrase when the user's global "default_highlight_action"
+-- setting happens to be "dictionary" -- for every other value (including
+-- "highlight", "select", "note", "translate", "wikipedia", "search", "ask",
+-- or "nothing"), showDict is never invoked for a phrase at all, so the
+-- patched dictionary.showDict above (which is what actually detects a phrase
+-- and shows FloatingActionMenu) never gets a chance to run. Single-word
+-- selections are untouched by this: onHoldRelease already always calls
+-- onLookupWord for those, independent of any setting, so is_word_selection
+-- == true keeps going through the untouched original_onHoldRelease below.
+--
+-- Every other case -- select_mode (extended highlight drag), cascade
+-- lookups, or anything else this file doesn't specifically recognise as a
+-- root phrase selection -- also falls straight through to
+-- original_onHoldRelease unchanged, so none of that existing behavior is
+-- affected by this patch.
+function FloatingDictionary:patchHoldRelease()
+	local highlight = self.ui and self.ui.highlight
+
+	if not highlight then
+		logger.warn("FloatingDictionary: ReaderHighlight not available.")
+		return
+	end
+
+	if highlight._floatingdictionary_holdrelease_patched then
+		return
+	end
+
+	local original_onHoldRelease = highlight.onHoldRelease
+	if type(original_onHoldRelease) ~= "function" then
+		return
+	end
+
+	highlight.onHoldRelease = function(hl_self, ...)
+		if not hl_self.clear_id
+			and not hl_self.select_mode
+			and hl_self.selected_text
+			and hl_self.selected_text.text
+			and isPhraseSelection(hl_self.selected_text.text) then
+			-- Mirrors what the original onHoldRelease does for a single-word
+			-- selection: treat this as a resolved word-style lookup instead
+			-- of leaving it to fall through to the highlight/translate/etc.
+			-- branch driven by default_highlight_action.
+			hl_self.is_word_selection = false
+
+			-- Same hold-timer cleanup the original onHoldRelease performs
+			-- right at its own entry point, before it ever branches on
+			-- is_word_selection/default_highlight_action.
+			hl_self:_resetHoldTimer(true)
+
+			-- Same box-transform pattern ReaderHighlight:lookupDict uses
+			-- upstream: turn the selection's page-space boxes into
+			-- screen-space boxes for whatever is about to anchor a popup to
+			-- them (here, both the dictionary card and FloatingActionMenu).
+			local word_boxes = {}
+			local source_boxes = hl_self.selected_text.sboxes or hl_self.selected_text.pboxes
+			if source_boxes then
+				for _, box in ipairs(source_boxes) do
+					table.insert(word_boxes, hl_self.view:pageToScreenTransform(hl_self.selected_text.pos0.page, box))
+				end
+			end
+
+			hl_self.ui.dictionary:onLookupWord(util.cleanupSelectedText(hl_self.selected_text.text), false, word_boxes, hl_self)
+
+			return true
+		end
+
+		-- Single-word selection, select_mode active, or any other case this
+		-- plugin doesn't specifically recognise as a root phrase selection:
+		-- untouched, exactly the original behavior.
+		return original_onHoldRelease(hl_self, ...)
+	end
+
+	highlight._floatingdictionary_holdrelease_patched = true
+end
+
+-- Shows the FloatingActionMenu "Highlight / Add Note" card for a phrase
+-- selection, anchored to the screen edge opposite the dictionary definition
+-- card (see shouldAnchorTop), so both can be visible together. Both buttons
+-- call directly into this plugin's own existing highlightSelection/
+-- addNoteForSelection helpers, which in turn call KOReader's native
+-- ReaderHighlight:showHighlightPrompt / ReaderHighlight:addNote -- no
+-- highlight/note logic of its own is reimplemented here.
+--
+-- dict_self is the ReaderDictionary instance showDict was called on (used
+-- only to reach dismissLookupInfo / the shared highlight instance, exactly
+-- like the rest of this file); dict_close_callback is whatever KOReader's
+-- own lookup machinery expects to be invoked once whichever action the user
+-- picks (Highlight/Add Note) is done with.
+function FloatingDictionary:showFloatingActionMenuForSelection(dict_self, word, boxes, dict_close_callback, results)
+	-- Snapshot the live selection now, same as the normal dictionary flow
+	-- does a little further down showDict: by the time the user actually
+	-- taps a button on this card, KOReader may already have cleared the
+	-- live highlight.selected_text (e.g. once the dictionary popup below it
+	-- opens/closes), so highlightSelection/addNoteForSelection restore from
+	-- this snapshot via restoreSelection rather than relying on it still
+	-- being live.
+	self:rememberSelection(dict_self)
+
+	-- Replace any action menu already on screen (e.g. from a previous
+	-- selection) rather than stacking a second one.
+	self:closeActionMenu()
+
+	local plugin = self
+
+	-- The word to actually save if the user taps "Save for review": the
+	-- resolved dictionary headword when one was found (e.g. "sensatez"
+	-- rather than the inflected "sensata" the user selected), same
+	-- resolution logic the (now-removed) automatic recorder used to use --
+	-- falls back to the raw selected text when there's no dictionary match
+	-- (e.g. a multi-word phrase with no headword of its own).
+	local review_word = word
+	if results and results[1] then
+		local ok_resolve, resolved = pcall(function()
+			return plugin:getResolvedLookupWord(word, results)
+		end)
+		if ok_resolve and resolved and resolved ~= "" then
+			review_word = resolved
+		end
+	end
+
+	-- Buttons shown are entirely user-configurable (up to
+	-- SMALL_MENU_MAX_BUTTONS, in the user's chosen order) -- see
+	-- genSmallMenuButtonsMenu / getSmallMenuButtonIds. Every candidate is a
+	-- native KOReader action; none of them are reimplemented here, this just
+	-- wires each configured id to the plugin's existing handler.
+	local actions = {}
+	for _, action_id in ipairs(self:getSmallMenuButtonIds()) do
+		local spec = SMALL_MENU_ACTION_BY_ID[action_id]
+		if spec then
+			table.insert(actions, {
+				text = spec.short_label or spec.label,
+				callback = function()
+					plugin:runSmallMenuAction(action_id, dict_self, word, review_word, dict_close_callback)
+				end,
+			})
+		end
+	end
+
+	if #actions == 0 then
+		return false
+	end
+
+	local popup = FloatingActionMenu:new({
+		plugin = plugin,
+		anchor_top = not shouldAnchorTop(boxes),
+		boxes = boxes,
+		actions = actions,
+		-- Same visual configuration the dictionary card itself reads --
+		-- border thickness/color, font family, font size -- so both stay
+		-- perfectly in sync with no separate settings of their own.
+		style_id = self:getPopupStyle(),
+		border_thickness = self:getPopupBorderThickness(),
+		border_color = self:getPopupBorderColor(),
+		font_size = self:getPopupFontSize(),
+		close_callback = function()
+			plugin.action_menu_popup = nil
+		end,
+	})
+
+	self.action_menu_popup = popup
+
+	pcall(function()
+		FloatingDictAnim.animateShow(popup, false)
+	end)
+
+	return true
+end
+
+-- Dispatches a small-menu button tap to the plugin's existing native-action
+-- handlers. Kept as one place so genSmallMenuButtonsMenu's ids and this
+-- dispatch never drift apart, and so showFloatingActionMenuForSelection
+-- above doesn't need one hardcoded closure per possible action.
+function FloatingDictionary:runSmallMenuAction(action_id, dict_self, word, review_word, dict_close_callback)
+	self:closeActionMenu()
+
+	if action_id == SMALL_MENU_ACTION_HIGHLIGHT then
+		-- Do not clear the selection before highlighting -- ReaderHighlight
+		-- needs the original selected_text/hold_pos to create the annotation.
+		return self:highlightSelection(dict_self, dict_close_callback)
+	elseif action_id == SMALL_MENU_ACTION_ADD_NOTE then
+		return self:addNoteForSelection(dict_self, dict_close_callback)
+	elseif action_id == SMALL_MENU_ACTION_WORD_REVIEW then
+		return self:addSelectionToWordReview(review_word or word)
+	elseif action_id == SMALL_MENU_ACTION_WIKIPEDIA then
+		return self:lookupWikipedia(dict_self, word)
+	elseif action_id == SMALL_MENU_ACTION_TRANSLATE then
+		-- Keep the selection/highlight state around: translating doesn't
+		-- consume the selection, and the translation viewer is a separate
+		-- popup layered on top, same reasoning as the footer's own
+		-- ACTION_TRANSLATE handling in runAction.
+		return self:translateText(word)
+	elseif action_id == SMALL_MENU_ACTION_SEARCH_BOOK then
+		self.selection_snapshot = nil
+		self:clearOriginalHighlight(dict_self)
+		self:clearSelection()
+		if dict_close_callback then
+			pcall(dict_close_callback)
+		end
+		return self:showSearchDialog(word)
+	end
+
+	return true
+end
+
+-- Best-effort "context" for a word about to be saved to Word Review: the
+-- sentence-ish snippet of surrounding text it was selected from, so the
+-- management screen (wordreview.lua:showManageWordsScreen) can later show
+-- the user *where* they saw this word, not just the word itself.
+--
+-- Relies on self.selection_snapshot already being populated (it always is
+-- by the time this runs -- see rememberSelection, called earlier in both
+-- the normal single-word lookup flow and showFloatingActionMenuForSelection)
+-- for the selection's pos0/pos1, and on the document's own
+-- getSelectedWordContext (implemented by both CreDocument/epub and
+-- PdfDocument, see credocument.lua/pdfdocument.lua) to fetch the words
+-- immediately before/after it. Deliberately word-count-based rather than
+-- true sentence-boundary detection, which KOReader only exposes for rolling
+-- (epub-like) documents -- this simpler approach works the same way for
+-- every document type the dictionary itself supports.
+--
+-- The raw prev/next word windows are then trimmed down to sentence
+-- boundaries (see trimContextToSentenceStart/trimContextToSentenceEnd
+-- below): backward from the selected word to the start of the sentence it
+-- sits in (a "." followed by whitespace and an uppercase letter), and
+-- forward to the sentence's closing "." -- so the saved context reads as a
+-- full, natural sentence whenever the surrounding text allows it, instead
+-- of an arbitrary word-count slice that can start/end mid-thought. When no
+-- such boundary can be found within the captured window, the best
+-- available fragment (the untrimmed window) is used instead, exactly as
+-- before.
+--
+-- Returns a plain trimmed string, or nil if no context could be captured
+-- (no live selection position, unsupported document type, or the lookup
+-- failed for any reason) -- callers must treat a missing context as normal,
+-- not as an error, since plenty of legitimate saves (e.g. a fallback/typed
+-- lookup with no real text selection behind it) have none to give.
+
+-- Trims `text` (the words immediately BEFORE the selected word) down to
+-- everything from the start of its sentence onward: the text following the
+-- LAST ". " + uppercase-letter boundary found in it. Returns `text`
+-- unchanged if no such boundary exists (best available fragment).
+local function trimContextToSentenceStart(text)
+	if not text or text == "" then
+		return text
+	end
+	local last_boundary
+	local search_from = 1
+	while true do
+		local start_idx, end_idx = text:find("%.%s+%u", search_from)
+		if not start_idx then
+			break
+		end
+		last_boundary = end_idx
+		search_from = end_idx + 1
+	end
+	if last_boundary then
+		return text:sub(last_boundary)
+	end
+	return text
+end
+
+-- Trims `text` (the words immediately AFTER the selected word) down to
+-- everything up to and including the FIRST sentence-ending "." found in it.
+-- Returns `text` unchanged if no such "." exists (best available fragment).
+local function trimContextToSentenceEnd(text)
+	if not text or text == "" then
+		return text
+	end
+	local dot_idx = text:find("%.")
+	if dot_idx then
+		return text:sub(1, dot_idx)
+	end
+	return text
+end
+
+function FloatingDictionary:getSelectionContext(word)
+	local snapshot = self.selection_snapshot
+	local selected_text = snapshot and snapshot.selected_text
+	if not selected_text or not selected_text.pos0 or not selected_text.pos1 then
+		return nil
+	end
+
+	local document = self.ui and self.ui.document
+	if not document or type(document.getSelectedWordContext) ~= "function" then
+		return nil
+	end
+
+	local ok, prev_context, next_context = pcall(function()
+		return document:getSelectedWordContext(
+			word, WORD_REVIEW_CONTEXT_SEARCH_WORDS, selected_text.pos0, selected_text.pos1, true)
+	end)
+	if not ok then
+		return nil
+	end
+
+	prev_context = trim(prev_context or "")
+	next_context = trim(next_context or "")
+
+	prev_context = trim(trimContextToSentenceStart(prev_context))
+	next_context = trim(trimContextToSentenceEnd(next_context))
+
+	local parts = {}
+	if prev_context ~= "" then table.insert(parts, prev_context) end
+	table.insert(parts, word)
+	if next_context ~= "" then table.insert(parts, next_context) end
+
+	-- Collapse whatever whitespace/line-break runs crengine/mupdf may have
+	-- left in the extracted text (they're not meant to be word-wrapped
+	-- prose at this point, just concatenated fragments).
+	local context = table.concat(parts, " "):gsub("%s+", " ")
+	context = trim(context)
+	if context == "" then
+		return nil
+	end
+
+	if #context > WORD_REVIEW_CONTEXT_MAX_CHARS then
+		context = context:sub(1, WORD_REVIEW_CONTEXT_MAX_CHARS) .. "…"
+	end
+
+	return context
+end
+
+-- Manually saves one word to this book's Word Review list (see
+-- wordreview.lua). This is now the ONLY way a word ever gets added: the
+-- small menu's dedicated button, never an automatic side effect of a normal
+-- lookup. Deliberately does not clear the selection/highlight or invoke
+-- dict_close_callback -- like the footer's "Add to vocabulary builder"
+-- action, saving a word for review is a lightweight, non-destructive tag
+-- that shouldn't end the current lookup session.
+function FloatingDictionary:addSelectionToWordReview(word)
+	word = trim(word or "")
+	if word == "" then
+		return self:notify(_("Nothing to save."))
+	end
+
+	-- Best-effort: a failure to capture context must never block saving the
+	-- word itself, so this is deliberately its own pcall, separate from the
+	-- recordLookup one below.
+	local ok_context, context = pcall(function()
+		return self:getSelectionContext(word)
+	end)
+	if not ok_context then
+		context = nil
+	end
+
+	local ok, err = pcall(function()
+		WordReview:recordLookup(self, word, context)
+	end)
+	if not ok then
+		logger.warn("FloatingDictionary: addSelectionToWordReview failed:", err)
+		return self:notify(_("Could not save word for review."))
+	end
+
+	return self:notify(T(_("Added \"%1\" to Word Review."), word))
+end
+
+-- "Add Note" counterpart to the existing highlightSelection above: restores
+-- the snapshotted selection and calls straight into KOReader's own
+-- ReaderHighlight:addNote, exactly the same native entry point the stock
+-- "Highlight / Add Note / Search" prompt itself uses for its own "Add Note"
+-- option, so note-taking behaves identically (same edit dialog, same
+-- storage) whether it was reached from there or from this card.
+function FloatingDictionary:addNoteForSelection(dict_self, dict_close_callback)
+	local highlight = self:restoreSelection(dict_self)
+
+	if not highlight then
+		return self:notify(_("No selection to annotate."))
+	end
+
+	if not highlight.selected_text
+		and highlight.hold_pos
+		and type(highlight.highlightFromHoldPos) == "function" then
+		pcall(function()
+			highlight:highlightFromHoldPos()
+		end)
+	end
+
+	if not (highlight.selected_text and highlight.selected_text.pos0 and highlight.selected_text.pos1) then
+		return self:notify(_("No selection to annotate."))
+	end
+
+	if type(highlight.addNote) ~= "function" then
+		return self:notify(_("No selection to annotate."))
+	end
+
+	-- Deferred by a tick, same as highlightSelection/lookupWikipedia
+	-- elsewhere in this file: addNote paints its own dialog, and calling it
+	-- synchronously from inside the showDict callstack (itself invoked from
+	-- deep inside the document engine's own event handling) can otherwise
+	-- race with KOReader's own hold-release cleanup.
+	UIManager:scheduleIn(0.05, function()
+		local ok, err = pcall(function()
+			highlight:addNote()
+		end)
+
+		self.selection_snapshot = nil
+		if dict_close_callback then
+			pcall(dict_close_callback)
+		end
+
+		if not ok then
+			logger.warn("FloatingDictionary: addNoteForSelection failed:", err)
+		end
+	end)
+
+	return true
 end
 
 function FloatingDictionary:beginNativeDictionaryPopup(dict_close_callback)
@@ -5908,7 +7251,7 @@ function FloatingDictionary:buildPreviewPayload(word, result, result_index, resu
 
 	local style_id = self:getPopupStyle()
 
-	local shown_word = result.word or word or _("Dictionary")
+	local shown_word = truncateHeaderText(result.word or word or _("Dictionary"))
 	local dict_name = result.dict or _("Dictionary")
 	local definition_html
 	local css
@@ -6144,35 +7487,6 @@ local function reorderResultsFromIndex(results, index)
 		table.insert(reordered, results[i])
 	end
 	return reordered
-end
-
--- Decides whether the preview card should float near the top of the screen
--- instead of the bottom. This matters when the highlighted selection sits in
--- the lower part of the screen: a bottom-anchored card would land right on
--- top of the very word the user just selected.
-local function shouldAnchorTop(boxes)
-	if type(boxes) ~= "table" or #boxes == 0 then
-		return false
-	end
-
-	local selection_bottom
-	for _, box in ipairs(boxes) do
-		if type(box) == "table" and box.y and box.h then
-			local box_bottom = box.y + box.h
-			if not selection_bottom or box_bottom > selection_bottom then
-				selection_bottom = box_bottom
-			end
-		end
-	end
-
-	if not selection_bottom then
-		return false
-	end
-
-	-- If the selection's lowest edge is already past the screen midpoint,
-	-- a bottom-anchored card (which sits in that same lower half) would
-	-- very likely cover it. Anchor to the top instead in that case.
-	return selection_bottom > (Screen:getHeight() / 2)
 end
 
 -- Entry point called by the patched ReaderDictionary:showDict, for *every*
@@ -6542,6 +7856,23 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 			-- font size change, etc.): no transition, just show.
 			UIManager:show(popup)
 		end
+
+		-- UIManager:show always inserts a new (non-modal) widget on top of
+		-- every other non-modal widget already in the window stack -- so
+		-- the dictionary card just (re)shown above would otherwise end up
+		-- ABOVE the small action menu (FloatingActionMenu) whenever the
+		-- card is rebuilt after the menu was already showing (e.g. paging
+		-- to another dictionary's result via swipe). That silently buried
+		-- the action menu underneath the new card: its buttons stopped
+		-- receiving taps at all, and a tap landing where they used to be
+		-- instead hit the dictionary card's own "tap outside my card"
+		-- handling, closing the whole session (both boxes at once) instead
+		-- of running the button's action. Re-showing the action menu right
+		-- after moves it back to the top of the stack, restoring the
+		-- intended order (dictionary card, action menu on top of it) with
+		-- no visual change since it doesn't move or repaint differently.
+		self:keepActionMenuOnTop()
+
 		return true
 	end
 
