@@ -20,16 +20,14 @@ Open KOReader's full dictionary only when you actually need it.
 
 # Features
 
-## Floating preview
+## Floating Preview
 
 - Compact popup
-- Word, dictionary and definition
+- Shows the word, dictionary and definition
 - Doesn't interrupt reading
 - Tap outside to dismiss
 
----
-
-## Multiple popup styles
+### Popup Styles
 
 Choose the appearance you prefer.
 
@@ -38,9 +36,35 @@ Choose the appearance you prefer.
 | **Classic** | Original Floating Dictionary interface |
 | **Kobo** | Kobo-inspired layout with compact toolbar and cleaner typography |
 
+### Display Modes
+
+Switch the interface instantly.
+
+| Mode | Purpose |
+|------|---------|
+| **Personal** | Uses your saved configuration |
+| **Minimal** | Hides the footer |
+| **Full** | Shows every available feature |
+| **Language Learner** | Translation-first layout |
+
+> Changing modes never overwrites your **Personal** configuration.
+
+### Popup Customization
+
+Personalize the popup to match your device.
+
+| Appearance | Appearance |
+|------------|------------|
+| Font | Popup height |
+| Font size | Border thickness |
+| Border darkness | Popup style |
+| Automatic book font | Custom CRE font |
+
 ---
 
-## Cascading lookups
+# Dictionary Experience
+
+## Cascading Lookups
 
 Explore definitions naturally without losing context.
 
@@ -63,12 +87,12 @@ DNA
 
 ---
 
-## Phrase and word selection
+## Phrase & Word Selection
 
 Select a single word or a whole phrase and get the right tools either way.
 
-| Dictionary popup | Highlight / Add Note card |
-|------------------|---------------------------|
+| Dictionary Popup | Highlight / Add Note |
+|------------------|----------------------|
 | Shown side by side | Works for single words too |
 | Kobo-style selection card | No need to choose between looking up or annotating |
 
@@ -76,7 +100,7 @@ Selecting a multi-word phrase no longer replaces the dictionary lookup with the 
 
 ---
 
-## Smarter dictionary ordering
+## Smarter Dictionary Ordering
 
 Floating Dictionary automatically improves dictionary results.
 
@@ -89,35 +113,20 @@ Floating Dictionary automatically improves dictionary results.
 
 ---
 
-## Display modes
+## Dictionary Navigation
 
-Switch the interface instantly.
+When multiple dictionaries contain a result:
 
-| Mode | Purpose |
-|------|---------|
-| **Personal** | Uses your saved configuration |
-| **Minimal** | Hides the footer |
-| **Full** | Shows every available feature |
-| **Language Learner** | Translation-first layout |
-
-> Changing modes never overwrites your **Personal** configuration.
+- Previous / Next buttons
+- Swipe gestures
+- Live dictionary counter
+- Navigation buttons automatically disable when unavailable
 
 ---
 
-## Popup customization
+# Toolbar & Actions
 
-Personalize the popup to match your device.
-
-| Customization | Customization |
-|---------------|---------------|
-| Font | Popup height |
-| Font size | Border thickness |
-| Border darkness | Popup style |
-| Automatic book font | Custom CRE font |
-
----
-
-## Footer customization
+## Footer Customization
 
 Every button can be configured independently.
 
@@ -135,49 +144,36 @@ floatingdictionary-images/
 
 ---
 
-## Dictionary navigation
-
-When multiple dictionaries contain a result:
-
-- Previous / Next buttons
-- Swipe gestures
-- Disabled navigation when unavailable
-- Live dictionary counter
-
----
-
-## Quick actions
+## Built-in Actions
 
 - ✓ Highlight
 - ✓ Translate
 - ✓ Wikipedia
-- ✓ Full-text search
+- ✓ Full-text Search
 - ✓ Vocabulary Builder
-- ✓ External plugin buttons
-- ✓ Save for review
+- ✓ Save for Review
+- ✓ External Plugin Buttons
 
 Buttons added by other dictionary plugins are detected automatically.
 
 ---
 
-## Highlight integration
+# Highlight Integration
 
-Floating Dictionary completely integrates KOReader's highlight settings.
+Floating Dictionary fully integrates KOReader's highlight settings.
 
 | Option | Option |
 |--------|--------|
 | Style | Color |
 | Opacity | Line height |
-| Note marker | Apply to all |
+| Note marker | Apply to all highlights |
 | PDF write-in | Instant refresh |
 
 No page reload is required.
 
----
+## Built-in Highlight Styles
 
-## Built-in highlight styles
-
-### Fill styles
+### Fill Styles
 
 - Solid Medium
 - Solid Light
@@ -190,7 +186,7 @@ No page reload is required.
 - Crosshatch
 - Wavy Fill
 
-### Underline styles
+### Underline Styles
 
 - Plain
 - Fine
@@ -207,7 +203,9 @@ No page reload is required.
 
 A lightweight vocabulary-building system inspired by Kindle's Vocabulary Builder.
 
-Automatically displays previously searched words:
+## Automatic Reviews
+
+Previously searched words can automatically appear:
 
 - When opening a book
 - When waking the device
@@ -218,17 +216,19 @@ Floating Dictionary automatically remembers the resolved dictionary entry whenev
 
 ---
 
-## Save words on purpose
+## Save for Review
 
-Add any lookup to your review list with the footer's **Save for review** button instead of every search being recorded automatically.
+Instead of saving every lookup automatically, you can now explicitly bookmark words using the **Save for Review** button.
+
+### Manage Saved Words
 
 | Feature | Feature |
 |---------|---------|
-| Manage saved words | Cross-book word list |
-| Words / Random / Mastered tabs | Multi-select and bulk delete |
+| Cross-book word list | Words / Random / Mastered tabs |
+| Multi-select | Bulk delete |
 | Saved context sentence | Mark words as mastered |
 
-Choose whether reviews use:
+Choose whether automatic reviews use:
 
 - Saved words only
 - Random dictionary headwords only
@@ -238,14 +238,14 @@ Choose whether reviews use:
 
 ## Flashcards
 
-Study your saved words one card at a time.
+Study saved words one card at a time.
 
 - Word and context sentence
-- See Definition
+- **See Definition** (inline dictionary lookup)
 - Mark as Mastered
 - Delete from the card
-- Context shown with the target word *italicized*
-- Jump into a random word from any book
+- Target word shown *italicized* inside its original sentence
+- Jump to a random word from any book
 
 ---
 
@@ -256,8 +256,8 @@ Optional in-process dictionary engine.
 | Feature | Feature |
 |---------|---------|
 | Near-instant lookups | No external `sdcv` process |
-| Automatic fallback | Never breaks searches |
 | Lower latency | Built-in index manager |
+| Automatic fallback | Never breaks searches |
 
 The index manager shows which dictionaries use FastDict and which continue using KOReader's standard engine.
 
@@ -285,12 +285,12 @@ plugins/
 # Usage
 
 1. Tap or select a word.
-2. Floating Dictionary displays a compact preview.
+2. Read the floating definition.
 3. Tap another word inside the definition to continue exploring.
-4. Navigate previous lookups using the breadcrumb.
-5. Browse dictionaries with swipe gestures or navigation buttons.
-6. Use the footer to highlight, translate, search, save for review, open Wikipedia or access external plugin actions.
-7. Tap outside the popup to close the lookup session.
+4. Navigate previous lookups with the breadcrumb.
+5. Switch dictionaries using swipe gestures or navigation buttons.
+6. Use the footer to highlight, translate, search, save words, open Wikipedia or launch external plugin actions.
+7. Tap outside the popup to dismiss it.
 
 ---
 
@@ -303,4 +303,3 @@ plugins/
 | External dictionary plugins | Offline translation detection |
 | Built-in page-turn animations | Built-in highlight styles |
 | FastDict fallback | No external patches required |
-
