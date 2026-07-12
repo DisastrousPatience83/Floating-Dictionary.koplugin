@@ -100,6 +100,32 @@ Selecting a multi-word phrase no longer replaces the dictionary lookup with the 
 
 ---
 
+## Smart Highlight
+
+Automatically highlight longer text selections without opening any popup.
+
+Enable it from:
+
+```text
+KOReader Menu → Floating Dictionary → Context Menu → Smart Highlight
+```
+
+When enabled, Floating Dictionary analyzes the selection before opening any interface:
+
+- **Single word** → Opens Floating Dictionary normally.
+- **Hyphenated word** (`-`, `–`, `—`) → Opens Floating Dictionary normally.  
+  Examples: `mother-in-law`, `well-known`, `Spanish–English`.
+- **Two or more words** → Immediately creates a highlight.
+
+When Smart Highlight activates:
+
+- No dictionary popup appears.
+- No Floating Dictionary context menu appears.
+- No additional confirmation is required.
+- The highlight is created instantly using your current highlight settings, including custom highlight styles configured through Floating Dictionary.
+
+---
+
 ## Smarter Dictionary Ordering
 
 Floating Dictionary automatically improves dictionary results.
