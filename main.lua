@@ -762,6 +762,12 @@ local CUSTOM_ICONS_DIR_NAME = "floatingdictionary-images"
 -- sortResultsByDictionaryOrder below.
 local SETTING_DICTIONARY_ORDER = "floatingdictionary_dictionary_order"
 local SETTING_SHOW_EXTERNAL_BUTTONS = "floatingdictionary_show_external_buttons"
+-- Smart Highlight: when enabled, a 2+ word selection is silently turned into
+-- a plain KOReader highlight (no dictionary popup, no FloatingActionMenu,
+-- no dialog of any kind) instead of going through this plugin's normal
+-- phrase-selection flow. Off by default -- see patchHoldRelease and
+-- createSmartHighlight below for where the decision is made and acted on.
+local SETTING_SMART_HIGHLIGHT_ENABLED = "floatingdictionary_smart_highlight_enabled"
 -- Popup text size (an absolute point size from the fixed POPUP_FONT_SIZES
 -- list), user-configurable from the settings menu with the same
 -- SpinWidget-based picker "Popup border thickness" uses. Replaces the old
@@ -3456,6 +3462,17 @@ function FloatingDictionary:genContextMenuSettingsMenu()
 			callback = function()
 				self:setShowExternalButtonsEnabled(not self:isShowExternalButtonsEnabled())
 			end,
+			separator = true,
+		},
+		{
+			text = _("Smart Highlight"),
+			checked_func = function()
+				return self:isSmartHighlightEnabled()
+			end,
+			callback = function()
+				self:setSmartHighlightEnabled(not self:isSmartHighlightEnabled())
+			end,
+			help_text = _("Treat a 2+ word selection as a highlight instead of a dictionary lookup. The text is highlighted instantly with no popup, using your current highlight settings. Single words (including hyphenated ones like well-known) are unaffected."),
 		},
 	}
 end
@@ -4738,6 +4755,19 @@ function FloatingDictionary:setShowExternalButtonsEnabled(enabled)
 	G_reader_settings:saveSetting(SETTING_SHOW_EXTERNAL_BUTTONS, enabled and true or false)
 end
 
+-- Default OFF, unlike most of this plugin's other toggles (which default
+-- to nilOrTrue/on): Smart Highlight changes what a 2+ word selection *does*
+-- (silently highlights instead of offering a dictionary lookup / the
+-- Highlight-Add Note card), so an opt-in default keeps existing users'
+-- current behavior unchanged until they deliberately turn it on.
+function FloatingDictionary:isSmartHighlightEnabled()
+	return G_reader_settings:isTrue(SETTING_SMART_HIGHLIGHT_ENABLED)
+end
+
+function FloatingDictionary:setSmartHighlightEnabled(enabled)
+	G_reader_settings:saveSetting(SETTING_SMART_HIGHLIGHT_ENABLED, enabled and true or false)
+end
+
 -- The vocabulary-builder button only makes sense if that plugin is enabled.
 function FloatingDictionary:hasVocabBuilder()
 	return self.ui and self.ui.vocabbuilder ~= nil
@@ -5949,16 +5979,30 @@ function FloatingDictionary:patchHoldRelease()
 			and hl_self.selected_text
 			and hl_self.selected_text.text
 			and isPhraseSelection(hl_self.selected_text.text) then
+			-- Same hold-timer cleanup the original onHoldRelease performs
+			-- right at its own entry point, before it ever branches on
+			-- is_word_selection/default_highlight_action. Needed regardless
+			-- of which of the two branches below ends up running.
+			hl_self:_resetHoldTimer(true)
+
+			-- Smart Highlight: this selection is 2+ words, so if the user
+			-- has opted in, skip the dictionary/FloatingActionMenu flow
+			-- entirely and silently create a plain highlight instead. This
+			-- check must happen here -- before any popup-related code below
+			-- runs -- since the whole point is that no UI is ever shown for
+			-- this selection. Single-word selections never reach this
+			-- branch at all (isPhraseSelection already filtered them out
+			-- above), so they keep opening the dictionary popup exactly as
+			-- before, regardless of this setting.
+			if self:isSmartHighlightEnabled() then
+				return self:createSmartHighlight(hl_self)
+			end
+
 			-- Mirrors what the original onHoldRelease does for a single-word
 			-- selection: treat this as a resolved word-style lookup instead
 			-- of leaving it to fall through to the highlight/translate/etc.
 			-- branch driven by default_highlight_action.
 			hl_self.is_word_selection = false
-
-			-- Same hold-timer cleanup the original onHoldRelease performs
-			-- right at its own entry point, before it ever branches on
-			-- is_word_selection/default_highlight_action.
-			hl_self:_resetHoldTimer(true)
 
 			-- Same box-transform pattern ReaderHighlight:lookupDict uses
 			-- upstream: turn the selection's page-space boxes into
@@ -5984,6 +6028,57 @@ function FloatingDictionary:patchHoldRelease()
 	end
 
 	highlight._floatingdictionary_holdrelease_patched = true
+end
+
+-- Silently turns a phrase (2+ word) selection into a plain KOReader
+-- highlight when Smart Highlight is enabled -- see the check in
+-- patchHoldRelease above, which is the only caller. No popup, card, or
+-- dialog is shown; the reader just sees the selected text highlighted.
+--
+-- Deliberately calls ReaderHighlight:saveHighlight(true) directly rather
+-- than showHighlightPrompt (used by the "Highlight" button elsewhere in
+-- this file, see highlightSelection): saveHighlight(true) is the same
+-- native, no-prompt entry point KOReader itself uses for a fully automatic
+-- highlight, so the result -- style, color, opacity, PDF write-in, and
+-- everything else driven by the user's current highlight settings -- is
+-- identical to a manual highlight, with nothing shown on screen while it
+-- happens.
+--
+-- hl_self.selected_text.pos0/pos1 are already populated at this point --
+-- this runs directly inside ReaderHighlight's own onHoldRelease, from the
+-- same selected_text KOReader just resolved for the hold-release gesture
+-- itself -- so, unlike highlightSelection/addNoteForSelection elsewhere in
+-- this file (which may run later, against a snapshotted/restored
+-- selection), no highlightFromHoldPos() fallback is needed here.
+function FloatingDictionary:createSmartHighlight(hl_self)
+	if type(hl_self.saveHighlight) ~= "function" then
+		logger.warn("FloatingDictionary: Smart Highlight unavailable (saveHighlight missing).")
+		return true
+	end
+
+	-- Deferred by a tick, same as highlightSelection/addNoteForSelection
+	-- elsewhere in this file: creating the highlight from inside the
+	-- showDict/onHoldRelease callstack (itself invoked from deep inside the
+	-- document engine's own event handling) can otherwise race with
+	-- KOReader's own hold-release cleanup.
+	UIManager:scheduleIn(0.05, function()
+		local ok, err = pcall(function()
+			hl_self:saveHighlight(true)
+
+			-- Clears the transient selection overlay only -- the saved
+			-- highlight annotation itself is independent of it and stays
+			-- in the document, exactly as after a manual highlight.
+			if type(hl_self.clear) == "function" then
+				hl_self:clear()
+			end
+		end)
+
+		if not ok then
+			logger.warn("FloatingDictionary: Smart Highlight failed:", err)
+		end
+	end)
+
+	return true
 end
 
 -- Shows the FloatingActionMenu "Highlight / Add Note" card for a phrase
