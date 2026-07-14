@@ -5975,6 +5975,16 @@ function FloatingDictionary:patchHoldRelease()
 		return
 	end
 
+	-- FIX: "plugin" must be captured here as a local closing over "self"
+	-- (the FloatingDictionary instance) -- exactly like patchDictionary()
+	-- does above. Without this local, the body of onHoldRelease below reads
+	-- "plugin" as an undeclared global (always nil), and
+	-- "plugin.enabled = plugin:isPreviewEnabled()" then crashes KOReader
+	-- with "attempt to index global 'plugin' (a nil value)" on every
+	-- hold-release text selection, regardless of whether Smart Highlight or
+	-- the plugin itself is enabled (the crash happens before either check).
+	local plugin = self
+
 	highlight.onHoldRelease = function(hl_self, ...)
 		-- Re-read both gates on every call (not cached) so toggling either
 		-- one from the menu takes effect immediately, without a restart.
