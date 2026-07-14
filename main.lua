@@ -3472,7 +3472,7 @@ function FloatingDictionary:genContextMenuSettingsMenu()
 			callback = function()
 				self:setSmartHighlightEnabled(not self:isSmartHighlightEnabled())
 			end,
-			help_text = _("Treat a 2+ word selection as a highlight instead of a dictionary lookup. The text is highlighted instantly with no popup, using your current highlight settings. Single words (including hyphenated ones like well-known) are unaffected."),
+			help_text = _("Treat a 2+ word selection as a highlight instead of a dictionary lookup. The text is highlighted instantly with no popup, using your current highlight settings. Single words (including hyphenated ones like well-known) are unaffected. When this is off, multi-word selections follow KOReader's own \"long-press on text\" setting instead, exactly as if this plugin were not installed."),
 		},
 	}
 end
@@ -5935,21 +5935,23 @@ function FloatingDictionary:patchDictionary()
 	dictionary._floatingdictionary_patched = true
 end
 
--- Forces a deterministic, setting-independent outcome for a *phrase* (2+
--- word) hold-release selection: always route it into the dictionary lookup
--- machinery (onLookupWord -> showDict), exactly like a single-word
--- selection already does unconditionally.
+-- Intercepts a *phrase* (2+ word) hold-release selection ONLY to implement
+-- Smart Highlight (silently saving a plain highlight instead of opening the
+-- dictionary) -- and, therefore, ONLY when both of these are true:
+--   1. The plugin itself is enabled (isPreviewEnabled).
+--   2. Smart Highlight is enabled (isSmartHighlightEnabled).
 --
--- Without this patch, ReaderHighlight:onHoldRelease() only calls
--- onLookupWord for a phrase when the user's global "default_highlight_action"
--- setting happens to be "dictionary" -- for every other value (including
--- "highlight", "select", "note", "translate", "wikipedia", "search", "ask",
--- or "nothing"), showDict is never invoked for a phrase at all, so the
--- patched dictionary.showDict above (which is what actually detects a phrase
--- and shows FloatingActionMenu) never gets a chance to run. Single-word
--- selections are untouched by this: onHoldRelease already always calls
--- onLookupWord for those, independent of any setting, so is_word_selection
--- == true keeps going through the untouched original_onHoldRelease below.
+-- Whenever either is off -- plugin disabled, or Smart Highlight off with the
+-- plugin otherwise enabled -- this falls straight through to
+-- original_onHoldRelease unchanged, so KOReader's own "default_highlight_action"
+-- setting (Settings -> Taps and gestures -> Long-press on text) and any other
+-- plugin hooking the same selection flow (e.g. readermenuredesign's "search
+-- dictionary on single-word selection") decide what happens, exactly as if
+-- this plugin were not installed at all.
+--
+-- Both flags are re-read on every call (not cached from init/enable-toggle
+-- time) so that toggling either one from the menu takes effect on the very
+-- next selection, with no restart required.
 --
 -- Every other case -- select_mode (extended highlight drag), cascade
 -- lookups, or anything else this file doesn't specifically recognise as a
@@ -5974,56 +5976,34 @@ function FloatingDictionary:patchHoldRelease()
 	end
 
 	highlight.onHoldRelease = function(hl_self, ...)
-		if not hl_self.clear_id
+		-- Re-read both gates on every call (not cached) so toggling either
+		-- one from the menu takes effect immediately, without a restart.
+		plugin.enabled = plugin:isPreviewEnabled()
+
+		if plugin.enabled
+			and self:isSmartHighlightEnabled()
+			and not hl_self.clear_id
 			and not hl_self.select_mode
 			and hl_self.selected_text
 			and hl_self.selected_text.text
 			and isPhraseSelection(hl_self.selected_text.text) then
 			-- Same hold-timer cleanup the original onHoldRelease performs
 			-- right at its own entry point, before it ever branches on
-			-- is_word_selection/default_highlight_action. Needed regardless
-			-- of which of the two branches below ends up running.
+			-- is_word_selection/default_highlight_action.
 			hl_self:_resetHoldTimer(true)
 
-			-- Smart Highlight: this selection is 2+ words, so if the user
-			-- has opted in, skip the dictionary/FloatingActionMenu flow
-			-- entirely and silently create a plain highlight instead. This
-			-- check must happen here -- before any popup-related code below
-			-- runs -- since the whole point is that no UI is ever shown for
-			-- this selection. Single-word selections never reach this
-			-- branch at all (isPhraseSelection already filtered them out
-			-- above), so they keep opening the dictionary popup exactly as
-			-- before, regardless of this setting.
-			if self:isSmartHighlightEnabled() then
-				return self:createSmartHighlight(hl_self)
-			end
-
-			-- Mirrors what the original onHoldRelease does for a single-word
-			-- selection: treat this as a resolved word-style lookup instead
-			-- of leaving it to fall through to the highlight/translate/etc.
-			-- branch driven by default_highlight_action.
-			hl_self.is_word_selection = false
-
-			-- Same box-transform pattern ReaderHighlight:lookupDict uses
-			-- upstream: turn the selection's page-space boxes into
-			-- screen-space boxes for whatever is about to anchor a popup to
-			-- them (here, both the dictionary card and FloatingActionMenu).
-			local word_boxes = {}
-			local source_boxes = hl_self.selected_text.sboxes or hl_self.selected_text.pboxes
-			if source_boxes then
-				for _, box in ipairs(source_boxes) do
-					table.insert(word_boxes, hl_self.view:pageToScreenTransform(hl_self.selected_text.pos0.page, box))
-				end
-			end
-
-			hl_self.ui.dictionary:onLookupWord(util.cleanupSelectedText(hl_self.selected_text.text), false, word_boxes, hl_self)
-
-			return true
+			-- Smart Highlight: this selection is 2+ words, the plugin is
+			-- enabled, and the user has opted in, so skip the dictionary
+			-- flow entirely and silently create a plain highlight instead.
+			return self:createSmartHighlight(hl_self)
 		end
 
-		-- Single-word selection, select_mode active, or any other case this
-		-- plugin doesn't specifically recognise as a root phrase selection:
-		-- untouched, exactly the original behavior.
+		-- Plugin disabled, Smart Highlight off, single-word selection,
+		-- select_mode active, or any other case this plugin doesn't
+		-- specifically recognise as a root phrase selection to smart-
+		-- highlight: untouched, exactly the original behavior -- so
+		-- KOReader's own "default_highlight_action" setting and any other
+		-- plugin hooking this same selection flow decide what happens.
 		return original_onHoldRelease(hl_self, ...)
 	end
 
