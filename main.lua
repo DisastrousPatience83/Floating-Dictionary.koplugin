@@ -1,7 +1,5 @@
 local Device = require("device")
 local Blitbuffer = require("ffi/blitbuffer")
-local BottomContainer = require("ui/widget/container/bottomcontainer")
-local TopContainer = require("ui/widget/container/topcontainer")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local DataStorage = require("datastorage")
 local Font = require("ui/font")
@@ -282,8 +280,7 @@ end
 -- `2-fancy-highlight-styles.lua` patch), merged directly into this plugin so
 -- it is fully self-contained: no separate file needs to live in
 -- koreader/patches for the extra styles (Solid medium, Solid light, Dotted,
--- Diagonal thin, Diagonal thick, Grid thin, Outline thick, Grid thick,
--- Crosshatch) to be available.
+-- Diagonal, Grid, Outline thick, Crosshatch) to be available.
 --
 -- This section only teaches KOReader how to *draw* highlights in the new
 -- styles and registers their names in the style picker (ReaderHighlight
@@ -308,13 +305,12 @@ local SETTING_FANCY_HIGHLIGHT_THICKNESS = "floatingdictionary_fancy_highlight_th
 local FANCY_HIGHLIGHT_STYLE_LIST = {
 	{ _("Crosshatch"),        "crosshatch" },
 	{ _("Dash underline"),    "dash_underline" },
-	{ _("Diagonal thick"),    "diagonal_thick" },
-	{ _("Diagonal thin"),     "diagonal_thin" },
+	{ _("Diagonal"),          "diagonal" },
 	{ _("Dotted"),            "dotted_fill" },
 	{ _("Dotted underline"),  "dotted_underline" },
+	{ _("Double underline"),  "double_underline" },
 	{ _("Fine underline"),    "fine_underline" },
-	{ _("Grid thick"),        "grid_thick" },
-	{ _("Grid thin"),         "grid_thin" },
+	{ _("Grid"),              "grid" },
 	{ _("Outline thick"),     "outline_thick" },
 	{ _("Plain underline"),   "plain_underline" },
 	{ _("Solid light"),       "solid_light" },
@@ -330,16 +326,15 @@ local FANCY_HIGHLIGHT_THICKNESS_DEFAULTS = {
 	solid_medium    = 2,  -- unused (solid fill has no stroke), kept for menu symmetry
 	solid_light     = 2,  -- unused (solid fill has no stroke), kept for menu symmetry
 	dotted_fill     = 2,  -- diameter of each dot in the fill pattern
-	diagonal_thin   = 1,  -- thickness of each thin diagonal line
-	diagonal_thick  = 3,  -- thickness of each thick diagonal line
-	grid_thin       = 1,  -- thickness of each grid line
+	diagonal        = 2,  -- thickness of each diagonal line (user-adjustable: thin<->thick)
+	grid            = 2,  -- thickness of each grid line (user-adjustable: thin<->thick)
 	outline_thick   = 3,  -- thickness of the outline border
-	grid_thick      = 2,  -- thickness of each grid line
 	crosshatch      = 1,  -- thickness of each crosshatch line
 	plain_underline  = 2,  -- thickness of the plain underline
 	dash_underline   = 2,  -- thickness of each dash
 	thick_underline  = 4,  -- thickness of the thick underline
 	dotted_underline = 2,  -- diameter of each dot
+	double_underline = 2,  -- thickness of each of the two underlines
 	fine_underline   = 1,  -- thickness of the fine underline
 	wavy_underline   = 2,  -- thickness of the wave line (bottom only)
 	wavy_fill        = 1,  -- thickness of the wave lines (filled band)
@@ -368,6 +363,91 @@ local function saveFancyHighlightThickness()
 	end
 end
 
+-- Styles this plugin lets the user darken/lighten independently of
+-- thickness (see lineColor in the drawer below, and the
+-- getLineDarkness/setLineDarkness/showLineDarknessDialog methods further
+-- down). This covers every style built out of strokes/dots -- the 7
+-- underline variants plus the fill/hatch styles that are also drawn as
+-- lines or dots (crosshatch, the diagonal hatch, dotted fill, the grid,
+-- the thick outline, and the wavy fill band). Kept as its own explicit set
+-- (rather than inferring "is this a line style" from the style_id name) so
+-- it's obvious at a glance exactly which styles get the combined
+-- Thickness+Darkness submenu in genMergedHighlightStylesMenu.
+-- Deliberately excludes solid_medium/solid_light: those are drawn as a
+-- dense/sparse horizontal-stripe fill (see paintBlend below), not a line or
+-- dot pattern, so there's nothing here for "darkness" to mean beyond what
+-- the stripe density already controls.
+local LINE_STYLE_IDS = {
+	plain_underline = true,
+	dash_underline = true,
+	thick_underline = true,
+	dotted_underline = true,
+	double_underline = true,
+	fine_underline = true,
+	wavy_underline = true,
+	crosshatch = true,
+	diagonal = true,
+	dotted_fill = true,
+	grid = true,
+	outline_thick = true,
+	wavy_fill = true,
+}
+
+-- Reverse lookup (display name -> style id) for the LINE_STYLE_IDS styles,
+-- used by genMergedHighlightStylesMenu to recognize which rows in
+-- KOReader's own native style picker (captured as native_highlight_sub_items
+-- -- see patchHighlightMenu) are one of ours, so it can fold that row's
+-- "select this style" action together with its Thickness/Darkness controls
+-- into a single per-style submenu instead of listing the same style twice.
+local LINE_STYLE_NAME_TO_ID = {}
+for _, style in ipairs(FANCY_HIGHLIGHT_STYLE_LIST) do
+	if LINE_STYLE_IDS[style[2]] then
+		LINE_STYLE_NAME_TO_ID[style[1]] = style[2]
+	end
+end
+
+-- Setting key kept unchanged from its original "underline_darkness" name so
+-- values already saved by earlier versions of this plugin (when only the 7
+-- underline styles had this control) keep loading correctly -- it's just a
+-- table keyed by style_id, so adding new style_ids to LINE_STYLE_IDS above
+-- extends it without touching what's already stored.
+local SETTING_LINE_DARKNESS = "floatingdictionary_underline_darkness"
+
+-- 1.0 (solid black) for every line style by default, matching how these
+-- looked before this setting existed.
+local LINE_DARKNESS_DEFAULT = 1.0
+local LINE_DARKNESS_MIN = 0.0
+local LINE_DARKNESS_MAX = 1.0
+local LINE_DARKNESS_STEP = 0.1
+
+-- Loads any previously saved darkness overrides, falling back to
+-- LINE_DARKNESS_DEFAULT for anything not yet saved. Shared table, read by
+-- the drawer function above (lineColor) and read/written by the Floating
+-- Dictionary menu.
+local function loadLineDarkness()
+	local saved = (G_reader_settings and G_reader_settings:readSetting(SETTING_LINE_DARKNESS)) or {}
+	local darkness = {}
+	for style_id, _enabled in pairs(LINE_STYLE_IDS) do
+		local value = saved[style_id]
+		if type(value) ~= "number" then
+			value = LINE_DARKNESS_DEFAULT
+		end
+		darkness[style_id] = math.max(LINE_DARKNESS_MIN, math.min(LINE_DARKNESS_MAX, value))
+	end
+	return darkness
+end
+
+if not UIManager._floatingdictionary_line_darkness then
+	UIManager._floatingdictionary_line_darkness = loadLineDarkness()
+end
+local LINE_DARKNESS = UIManager._floatingdictionary_line_darkness
+
+local function saveLineDarkness()
+	if G_reader_settings then
+		G_reader_settings:saveSetting(SETTING_LINE_DARKNESS, LINE_DARKNESS)
+	end
+end
+
 if not UIManager._floatingdictionary_highlight_styles_patched then
 	UIManager._floatingdictionary_highlight_styles_patched = true
 
@@ -391,20 +471,21 @@ if not UIManager._floatingdictionary_highlight_styles_patched then
 		local DOTTED_FILL_SPACING = 6
 
 		-- Spacing (pixels between line centers, measured perpendicular to
-		-- the line) for the two diagonal-hatch styles and the crosshatch.
-		local DIAGONAL_THIN_SPACING  = 6
-		local DIAGONAL_THICK_SPACING = 8
-		local CROSSHATCH_SPACING     = 7
+		-- the line) for the diagonal-hatch style and the crosshatch.
+		local DIAGONAL_SPACING  = 7
+		local CROSSHATCH_SPACING = 7
 
-		-- Spacing (pixels between grid lines) for the two grid styles.
-		local GRID_THIN_SPACING  = 6
-		local GRID_THICK_SPACING = 9
+		-- Spacing (pixels between grid lines) for the grid style.
+		local GRID_SPACING = 7
 
 		-- Length of each dash / gap for "Dash underline", in pixels
 		local DASH_UNDERLINE_SIZE = { dash = 8, gap = 4 }
 
 		-- Length of each dot / gap for "Dotted underline", in pixels
 		local DOTTED_UNDERLINE_SIZE = { dot = 3, gap = 3 }
+
+		-- Vertical gap (pixels) between the two lines of "Double underline"
+		local DOUBLE_UNDERLINE_GAP = 3
 
 		-- Size of one wave cycle for "Wavy underline"/"Wavy fill", in
 		-- pixels (width, height)
@@ -440,16 +521,15 @@ if not UIManager._floatingdictionary_highlight_styles_patched then
 			solid_medium = true,
 			solid_light = true,
 			dotted_fill = true,
-			diagonal_thin = true,
-			diagonal_thick = true,
-			grid_thin = true,
+			diagonal = true,
+			grid = true,
 			outline_thick = true,
-			grid_thick = true,
 			crosshatch = true,
 			plain_underline = true,
 			dash_underline = true,
 			thick_underline = true,
 			dotted_underline = true,
+			double_underline = true,
 			fine_underline = true,
 			wavy_underline = true,
 			wavy_fill = true,
@@ -467,25 +547,63 @@ if not UIManager._floatingdictionary_highlight_styles_patched then
 			color = color or Blitbuffer.COLOR_BLACK
 			local is_color8 = Blitbuffer.isColor8(color)
 
-			local function paint(px, py, pw, ph)
+			-- Paints with an explicit color instead of the closured "color"
+			-- above; paint() below is just this with "color" as the
+			-- default, kept so every solid-fill style's call sites don't
+			-- need to change. Used directly by the LINE_STYLE_IDS styles so
+			-- each one can be painted in its own user-configured darkness
+			-- (see lineColor below) without touching the highlight's own
+			-- assigned color for anything else (the solid fills, the note
+			-- mark indicator, ...).
+			local function paintColor(px, py, pw, ph, use_color)
 				if is_color8 then
-					bb:paintRect(px, py, pw, ph, color)
+					bb:paintRect(px, py, pw, ph, use_color)
 				else
-					bb:paintRectRGB32(px, py, pw, ph, color)
+					bb:paintRectRGB32(px, py, pw, ph, use_color)
 				end
 			end
 
+			local function paint(px, py, pw, ph)
+				paintColor(px, py, pw, ph, color)
+			end
+
+			-- Maps a style's user-configured 0.0-1.0 darkness (see
+			-- LINE_DARKNESS / getLineDarkness/setLineDarkness further down)
+			-- to an actual paint color for that line/dot style: 1.0 ->
+			-- solid black, 0.0 -> white/invisible, same formula as
+			-- getPopupBorderColor uses for the popup border darkness
+			-- setting. Grayscale (Color8) screens only -- the vast majority
+			-- of e-ink devices -- since blending would need a different,
+			-- color-specific formula on RGB32 screens; there, the
+			-- highlight's own assigned color is used unmodified so color
+			-- highlighting keeps working exactly as before.
+			local function lineColor(style_id)
+				if not is_color8 then
+					return color
+				end
+				local darkness = LINE_DARKNESS[style_id]
+				if type(darkness) ~= "number" then
+					darkness = 1.0
+				end
+				local level = math.floor((1 - darkness) * 255 + 0.5)
+				level = math.max(0, math.min(255, level))
+				return Blitbuffer.Color8(level)
+			end
+
 			-- Outline-drawing helper for Rectangle: draws a border "thick"
-			-- pixels wide using the same paint() used everywhere else, so it
-			-- works on both color8 and RGB32 buffers.
-			local function paintBorder(bx, by, bw, bh, thick)
+			-- pixels wide using the same paintColor() used everywhere else,
+			-- so it works on both color8 and RGB32 buffers. use_color
+			-- defaults to the highlight's own color, but callers pass a
+			-- lineColor() result to make the border darkness-adjustable.
+			local function paintBorder(bx, by, bw, bh, thick, use_color)
+				use_color = use_color or color
 				if bb.paintBorder then
-					bb:paintBorder(bx, by, bw, bh, thick, color)
+					bb:paintBorder(bx, by, bw, bh, thick, use_color)
 				else
-					paint(bx, by, bw, thick)                     -- top
-					paint(bx, by + bh - thick, bw, thick)         -- bottom
-					paint(bx, by, thick, bh)                      -- left
-					paint(bx + bw - thick, by, thick, bh)         -- right
+					paintColor(bx, by, bw, thick, use_color)                     -- top
+					paintColor(bx, by + bh - thick, bw, thick, use_color)         -- bottom
+					paintColor(bx, by, thick, bh, use_color)                      -- left
+					paintColor(bx + bw - thick, by, thick, bh, use_color)         -- right
 				end
 			end
 
@@ -509,36 +627,41 @@ if not UIManager._floatingdictionary_highlight_styles_patched then
 			-- thickness. Lines are drawn as 1px-wide diagonal steps, offset
 			-- across the box width, so it works identically on color8 and
 			-- RGB32 buffers without needing a native line primitive.
-			local function paintDiagonalHatch(spacing, thick)
+			-- use_color defaults to the highlight's own color; callers pass
+			-- a lineColor() result to make the hatch darkness-adjustable.
+			local function paintDiagonalHatch(spacing, thick, use_color)
+				use_color = use_color or color
 				local half = math.floor(thick / 2)
 				for offset = -h, w, spacing do
 					for i = 0, h - 1 do
 						local px = x + offset + i
 						local py = y + h - 1 - i
 						if px >= x and px < x + w then
-							paint(px - half, py, thick, 1)
+							paintColor(px - half, py, thick, 1, use_color)
 						end
 					end
 				end
 			end
 
 			-- Draws an evenly-spaced grid (horizontal + vertical lines)
-			-- across the whole highlight rect.
-			local function paintGrid(spacing, thick)
+			-- across the whole highlight rect. use_color as above.
+			local function paintGrid(spacing, thick, use_color)
+				use_color = use_color or color
 				for gy = 0, h, spacing do
-					paint(x, y + math.min(gy, h - thick), w, thick)
+					paintColor(x, y + math.min(gy, h - thick), w, thick, use_color)
 				end
 				for gx = 0, w, spacing do
-					paint(x + math.min(gx, w - thick), y, thick, h)
+					paintColor(x + math.min(gx, w - thick), y, thick, h, use_color)
 				end
 			end
 
 			-- Draws an evenly-spaced field of small square dots across the
-			-- whole highlight rect.
-			local function paintDots(spacing, dot_size)
+			-- whole highlight rect. use_color as above.
+			local function paintDots(spacing, dot_size, use_color)
+				use_color = use_color or color
 				for gy = math.floor(spacing / 2), h, spacing do
 					for gx = math.floor(spacing / 2), w, spacing do
-						paint(x + gx, y + gy, dot_size, dot_size)
+						paintColor(x + gx, y + gy, dot_size, dot_size, use_color)
 					end
 				end
 			end
@@ -551,31 +674,24 @@ if not UIManager._floatingdictionary_highlight_styles_patched then
 
 			elseif drawer == "dotted_fill" then
 				local thick = LINE_THICKNESS.dotted_fill
-				paintDots(DOTTED_FILL_SPACING, thick)
+				paintDots(DOTTED_FILL_SPACING, thick, lineColor("dotted_fill"))
 
-			elseif drawer == "diagonal_thin" then
-				local thick = LINE_THICKNESS.diagonal_thin
-				paintDiagonalHatch(DIAGONAL_THIN_SPACING, thick)
+			elseif drawer == "diagonal" then
+				local thick = LINE_THICKNESS.diagonal
+				paintDiagonalHatch(DIAGONAL_SPACING, thick, lineColor("diagonal"))
 
-			elseif drawer == "diagonal_thick" then
-				local thick = LINE_THICKNESS.diagonal_thick
-				paintDiagonalHatch(DIAGONAL_THICK_SPACING, thick)
-
-			elseif drawer == "grid_thin" then
-				local thick = LINE_THICKNESS.grid_thin
-				paintGrid(GRID_THIN_SPACING, thick)
+			elseif drawer == "grid" then
+				local thick = LINE_THICKNESS.grid
+				paintGrid(GRID_SPACING, thick, lineColor("grid"))
 
 			elseif drawer == "outline_thick" then
 				local thick = LINE_THICKNESS.outline_thick
-				paintBorder(x, y, w, h, thick)
-
-			elseif drawer == "grid_thick" then
-				local thick = LINE_THICKNESS.grid_thick
-				paintGrid(GRID_THICK_SPACING, thick)
+				paintBorder(x, y, w, h, thick, lineColor("outline_thick"))
 
 			elseif drawer == "crosshatch" then
 				local thick = LINE_THICKNESS.crosshatch
-				paintDiagonalHatch(CROSSHATCH_SPACING, thick)
+				local c_color = lineColor("crosshatch")
+				paintDiagonalHatch(CROSSHATCH_SPACING, thick, c_color)
 				-- Second pass, mirrored, to cross the first set of lines.
 				for offset = -h, w, CROSSHATCH_SPACING do
 					for i = 0, h - 1 do
@@ -583,54 +699,70 @@ if not UIManager._floatingdictionary_highlight_styles_patched then
 						local py = y + i
 						if px >= x and px < x + w then
 							local half = math.floor(thick / 2)
-							paint(px - half, py, thick, 1)
+							paintColor(px - half, py, thick, 1, c_color)
 						end
 					end
 				end
 
 			elseif drawer == "plain_underline" then
 				local thick = LINE_THICKNESS.plain_underline
-				paint(x, y + h - thick, w, thick)
+				local u_color = lineColor("plain_underline")
+				paintColor(x, y + h - thick, w, thick, u_color)
 
 			elseif drawer == "dash_underline" then
 				local thick = LINE_THICKNESS.dash_underline
+				local u_color = lineColor("dash_underline")
 				local dash_len, gap_len = DASH_UNDERLINE_SIZE.dash, DASH_UNDERLINE_SIZE.gap
 				for i = 0, w, dash_len + gap_len do
 					local dw = math.min(dash_len, w - i)
 					if dw > 0 then
-						paint(x + i, y + h - thick, dw, thick)
+						paintColor(x + i, y + h - thick, dw, thick, u_color)
 					end
 				end
 
 			elseif drawer == "thick_underline" then
 				local thick = LINE_THICKNESS.thick_underline
-				paint(x, y + h - thick, w, thick)
+				local u_color = lineColor("thick_underline")
+				paintColor(x, y + h - thick, w, thick, u_color)
 
 			elseif drawer == "dotted_underline" then
 				local thick = LINE_THICKNESS.dotted_underline
+				local u_color = lineColor("dotted_underline")
 				local dot_len, gap_len = DOTTED_UNDERLINE_SIZE.dot, DOTTED_UNDERLINE_SIZE.gap
 				for i = 0, w, dot_len + gap_len do
 					local dw = math.min(dot_len, w - i)
 					if dw > 0 then
-						paint(x + i, y + h - thick, dw, thick)
+						paintColor(x + i, y + h - thick, dw, thick, u_color)
 					end
 				end
 
+			elseif drawer == "double_underline" then
+				local thick = LINE_THICKNESS.double_underline
+				local u_color = lineColor("double_underline")
+				-- Bottom line flush with the text baseline, same as the
+				-- other underline styles; the second line sits directly
+				-- above it, separated by a small fixed gap.
+				paintColor(x, y + h - thick, w, thick, u_color)
+				paintColor(x, y + h - thick - DOUBLE_UNDERLINE_GAP - thick, w, thick, u_color)
+
 			elseif drawer == "fine_underline" then
 				local thick = LINE_THICKNESS.fine_underline
-				paint(x, y + h - thick, w, thick)
+				local u_color = lineColor("fine_underline")
+				paintColor(x, y + h - thick, w, thick, u_color)
 
 			elseif drawer == "wavy_underline" then
 				local thick = LINE_THICKNESS.wavy_underline
+				local u_color = lineColor("wavy_underline")
 				local wave_w, wave_h = WAVY_SIZE.w, WAVY_SIZE.h
 				local cy = y + h - 2
 				for i = 0, w - 1 do
 					local dy = math.floor(math.sin(i / wave_w * math.pi) * wave_h + 0.5)
-					paint(x + i, cy + dy, 1, thick)
+					paintColor(x + i, cy + dy, 1, thick, u_color)
 				end
 
 			elseif drawer == "wavy_fill" then
 				local thick = LINE_THICKNESS.wavy_fill
+				local wf_color = lineColor("wavy_fill")
 				local wave_w, wave_h = WAVY_SIZE.w, WAVY_SIZE.h
 				local row = 0
 				while row < h do
@@ -639,7 +771,7 @@ if not UIManager._floatingdictionary_highlight_styles_patched then
 						local dy = math.floor(math.sin(i / wave_w * math.pi) * wave_h + 0.5)
 						local py = cy + dy
 						if py < y + h then
-							paint(x + i, py, 1, thick)
+							paintColor(x + i, py, 1, thick, wf_color)
 						end
 					end
 					row = row + wave_h * 2 + WAVY_FILL_ROW_GAP
@@ -768,6 +900,17 @@ local SETTING_SHOW_EXTERNAL_BUTTONS = "floatingdictionary_show_external_buttons"
 -- phrase-selection flow. Off by default -- see patchHoldRelease and
 -- createSmartHighlight below for where the decision is made and acted on.
 local SETTING_SMART_HIGHLIGHT_ENABLED = "floatingdictionary_smart_highlight_enabled"
+-- Small menu (FloatingActionMenu -- the compact "Highlight / Add Note / Save
+-- for review / ..." card shown next to a selection): its own on/off switch,
+-- independent from "Enable Floating Dictionary" (isPreviewEnabled). Turning
+-- the dictionary popup off no longer implicitly turns this off too, and vice
+-- versa -- a user who only wants the small menu (e.g. to highlight/save
+-- words) but not the floating dictionary card, or only wants the dictionary
+-- card but not the small menu, can now have either independently. On by
+-- default, matching existing behavior for users who never touch this
+-- setting. See isSmallMenuEnabled/setSmallMenuEnabled below, and the guard
+-- in the patched showDict where this is actually consulted.
+local SETTING_SMALL_MENU_ENABLED = "floatingdictionary_small_menu_enabled"
 -- Popup text size (an absolute point size from the fixed POPUP_FONT_SIZES
 -- list), user-configurable from the settings menu with the same
 -- SpinWidget-based picker "Popup border thickness" uses. Replaces the old
@@ -778,6 +921,25 @@ local SETTING_POPUP_FONT_SIZE = "floatingdictionary_popup_font_size"
 -- can each pick a card size that fits them well. Replaces the old fixed
 -- PANEL_MAX_HEIGHT_RATIO constant, which is now only the default value.
 local SETTING_CARD_HEIGHT_RATIO = "floatingdictionary_card_height_ratio"
+-- Whether the dictionary popup (and the small "Highlight/Add Note" menu
+-- alongside it) hugs the selected word itself, or always anchors flush to
+-- the top/bottom screen edge regardless of where the selection is. Both
+-- modes still pick top vs. bottom automatically based on which half of the
+-- screen the selection is in (see shouldAnchorTop) -- this setting only
+-- controls how close to the selection the card lands within that chosen
+-- side. "near_word" (default) is the newer hug-the-selection behavior;
+-- "screen_edge" restores the older, simpler edge-anchored placement for
+-- anyone who prefers a fixed, predictable spot over one that moves with
+-- the selection. See getPopupPositionMode/setPopupPositionMode below and
+-- the two positioning blocks that read them (FloatingDictionaryPopup's
+-- update() and FloatingActionMenu's update()).
+local SETTING_POPUP_POSITION_MODE = "floatingdictionary_popup_position_mode"
+local POPUP_POSITION_NEAR_WORD = "near_word"
+local POPUP_POSITION_SCREEN_EDGE = "screen_edge"
+local VALID_POPUP_POSITION_MODES = {
+	[POPUP_POSITION_NEAR_WORD] = true,
+	[POPUP_POSITION_SCREEN_EDGE] = true,
+}
 -- Cascading lookups (tapping a cross-reference link inside a definition,
 -- which KOReader re-routes through ReaderDictionary:showDict, same as any
 -- other lookup) always stack on top of the previous lookup with a
@@ -1027,12 +1189,20 @@ local ACTION_EXTERNAL = "external_plugins"
 -- "kind" marks the few entries that aren't plain toggleable dictionary
 -- actions: the dictionary-navigation arrows and the external-plugins group
 -- each need special handling when the footer is actually built.
+-- ACTION_VOCABULARY now drives the unified "Save for review" button: saving
+-- always records the word in this book's own Word Review list, and --
+-- transparently, as part of that same save -- also mirrors it into the
+-- Vocabulary Builder plugin whenever that plugin is installed (see
+-- FloatingDictionary:addSelectionToWordReview below). There is deliberately
+-- no separate "Add to vocabulary builder" button anymore: from the user's
+-- perspective there is only one save action, and it always ends up in both
+-- places at once instead of forcing a choice between them.
 local ACTIONS = {
 	{ id = ACTION_NAV_PREV, label = _("Previous result"), short_label = _("Prev"), kind = "nav_prev" },
 	{ id = ACTION_HIGHLIGHT, label = _("Highlight"), short_label = _("Highlight") },
 	{ id = ACTION_SEARCH_BOOK, label = _("Fulltext search"), short_label = _("Search") },
 	{ id = ACTION_WIKIPEDIA, label = _("Wikipedia"), short_label = _("Wiki") },
-	{ id = ACTION_VOCABULARY, label = _("Add to vocabulary builder"), short_label = _("+Vocab") },
+	{ id = ACTION_VOCABULARY, label = _("Save for review"), short_label = _("Save") },
 	{ id = ACTION_TRANSLATE, label = _("Translate"), short_label = _("Translate") },
 	{ id = ACTION_EXTERNAL, label = _("Buttons from other plugins"), short_label = "+", kind = "external" },
 	{ id = ACTION_NAV_NEXT, label = _("Next result"), short_label = _("Next"), kind = "nav_next" },
@@ -1064,7 +1234,10 @@ local SMALL_MENU_ACTIONS = {
 	{ id = SMALL_MENU_ACTION_HIGHLIGHT, label = _("Highlight"), short_label = _("Highlight") },
 	{ id = SMALL_MENU_ACTION_ADD_NOTE, label = _("Add Note"), short_label = _("Note") },
 	-- Short, but explicit that this saves the word for later review (see
-	-- addSelectionToWordReview / the "Word review" feature below).
+	-- addSelectionToWordReview / the "Word review" feature below). This is
+	-- now the ONLY save action: saving here also transparently mirrors the
+	-- word into the Vocabulary Builder plugin when that plugin is present,
+	-- so there is no separate "Add to vocabulary builder" button anymore.
 	{ id = SMALL_MENU_ACTION_WORD_REVIEW, label = _("Save for review"), short_label = _("Save") },
 	{ id = SMALL_MENU_ACTION_WIKIPEDIA, label = _("Wikipedia"), short_label = _("Wikipedia") },
 	{ id = SMALL_MENU_ACTION_TRANSLATE, label = _("Translate"), short_label = _("Translate") },
@@ -1124,6 +1297,45 @@ local PLUGIN_ICON_CANDIDATES = {
 
 local function trim(text)
 	return tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+-- Turns a (usually sdcv-produced) HTML definition into a short, plain-text
+-- string suitable for storing outside this plugin -- specifically, as the
+-- "definition"/"full_definition" text mirrored into the Vocabulary Builder
+-- plugin's own database (see mirrorWordToVocabBuilder further down), whose
+-- schema stores plain strings, not markup. Same block-tag-to-newline +
+-- tag-stripping + entity-decoding approach already used by
+-- FloatingDictionaryPopup:estimateHtmlContentHeight, kept here as a small
+-- standalone helper since this needs the resulting *text*, not just its
+-- height.
+local function htmlToPlainText(html, max_chars)
+	if not html or html == "" then
+		return ""
+	end
+
+	local text = html
+	text = text:gsub("<%s*br%s*/?%s*>", "\n")
+	text = text:gsub("<%s*/?%s*p[^>]*>", "\n")
+	text = text:gsub("<%s*/?%s*div[^>]*>", "\n")
+	text = text:gsub("<%s*/?%s*li[^>]*>", "\n")
+	text = text:gsub("<%s*/?%s*h[1-6][^>]*>", "\n")
+	text = text:gsub("<[^>]+>", "")
+	text = text:gsub("&nbsp;", " ")
+	text = text:gsub("&amp;", "&")
+	text = text:gsub("&lt;", "<")
+	text = text:gsub("&gt;", ">")
+	text = text:gsub("&quot;", '"')
+	text = text:gsub("&#39;", "'")
+	-- Collapse runs of blank lines/whitespace down to single spaces: this is
+	-- meant to read as one compact definition string, not a formatted block.
+	text = text:gsub("%s+", " ")
+	text = trim(text)
+
+	if max_chars and #text > max_chars then
+		text = text:sub(1, max_chars)
+	end
+
+	return text
 end
 
 -- Compact header for a dictionary card: a single word/short selection is
@@ -1810,6 +2022,16 @@ local FloatingDictionaryPopup = InputContainer:extend({
 	result_count = 1,
 	anchor_top = false, -- true when the selection sits low on screen and the
 	                    -- panel would otherwise cover it; anchors to the top instead.
+	boxes = nil, -- selection boxes (screen-space, same shape showDict/onLookupWord
+	                    -- receive) -- lets the card hug the selection itself, the
+	                    -- same way FloatingActionMenu (the small menu) already does,
+	                    -- instead of anchoring flush to the screen edge.
+	popup_position_mode = nil, -- "near_word" (default, hug the selection -- see
+	                    -- boxes above) or "screen_edge" (always anchor flush to
+	                    -- the top/bottom screen edge instead, ignoring boxes);
+	                    -- user-configurable, see FloatingDictionary
+	                    -- :getPopupPositionMode. Only meaningful when
+	                    -- center_on_screen is false.
 	center_on_screen = false, -- true to center the card both horizontally and
 	                    -- vertically instead of anchoring to top/bottom (used
 	                    -- by the word-review popup); takes priority over
@@ -2015,23 +2237,63 @@ function FloatingDictionaryPopup:init()
 			dimen = Screen:getSize(),
 			card_row,
 		})
-	elseif self.anchor_top then
-		-- Selection sits low on screen: float the card near the top edge
-		-- instead, so it doesn't cover the highlighted word.
-		self[1] = TopContainer:new({
-			dimen = Screen:getSize(),
-			VerticalGroup:new({
-				VerticalSpan:new({ width = edge_margin }),
-				card_row,
-			}),
-		})
 	else
-		self[1] = BottomContainer:new({
-			dimen = Screen:getSize(),
-			VerticalGroup:new({
-				card_row,
-				VerticalSpan:new({ width = edge_margin }),
-			}),
+		-- Hug the card as close as possible to the actual selection, the
+		-- same way the small "Highlight / Add Note" menu (FloatingActionMenu)
+		-- already does: just above or just below the selection's own
+		-- bounding box, rather than flush against the top/bottom screen
+		-- edge. anchor_top (from shouldAnchorTop) still decides which side
+		-- is preferred; if that preferred side doesn't actually have room,
+		-- fall back to whichever side does, and only fall back to the plain
+		-- edge-anchored position when no selection boxes are available at
+		-- all (shouldn't normally happen), OR when the user has explicitly
+		-- chosen "screen_edge" positioning mode (see
+		-- FloatingDictionary:getPopupPositionMode) -- in which case this
+		-- skips straight to that same edge-anchored fallback on purpose,
+		-- ignoring self.boxes entirely, for a fixed/predictable spot.
+		local gap = Screen:scaleBySize(8)
+		local sel_top, sel_bottom
+		if self.popup_position_mode ~= POPUP_POSITION_SCREEN_EDGE then
+			for _, box in ipairs(self.boxes or {}) do
+				if type(box) == "table" and box.y and box.h then
+					local y0, y1 = box.y, box.y + box.h
+					sel_top = sel_top and math.min(sel_top, y0) or y0
+					sel_bottom = sel_bottom and math.max(sel_bottom, y1) or y1
+				end
+			end
+		end
+
+		local target_y
+		if sel_top and sel_bottom then
+			local top_candidate = sel_top - gap - self.height
+			local bottom_candidate = sel_bottom + gap
+			local fits_top = top_candidate >= edge_margin
+			local fits_bottom = (bottom_candidate + self.height) <= (screen_height - edge_margin)
+
+			if self.anchor_top and fits_top then
+				target_y = top_candidate
+			elseif not self.anchor_top and fits_bottom then
+				target_y = bottom_candidate
+			elseif fits_top then
+				target_y = top_candidate
+			elseif fits_bottom then
+				target_y = bottom_candidate
+			else
+				-- Neither side has room without running off screen: clamp
+				-- fully on screen, closest to the preferred side, rather
+				-- than letting the card fall off the edge.
+				target_y = self.anchor_top and top_candidate or bottom_candidate
+				target_y = math.max(edge_margin, math.min(target_y, screen_height - self.height - edge_margin))
+			end
+		else
+			-- No usable selection boxes: fall back to the old plain
+			-- edge-anchored behavior.
+			target_y = self.anchor_top and edge_margin or (screen_height - self.height - edge_margin)
+		end
+
+		self[1] = VerticalGroup:new({
+			VerticalSpan:new({ width = math.max(0, math.floor(target_y)) }),
+			card_row,
 		})
 	end
 end
@@ -2687,6 +2949,7 @@ local FloatingActionMenu = InputContainer:extend({
 	actions = nil, -- ordered list of { text = "...", callback = function() ... end }
 	anchor_top = false, -- true floats above the selection; false (default) floats below it
 	boxes = nil, -- selection boxes (screen-space, same shape showDict/onLookupWord receive), used to hug the card to the actual selection instead of a screen edge
+	popup_position_mode = nil, -- "near_word" (default) or "screen_edge" -- see the matching field on FloatingDictionaryPopup above; kept in sync so both cards use the same positioning mode
 	close_callback = nil,
 	plugin = nil, -- the owning FloatingDictionary instance; used to (a) read the dictionary's own font, and (b) find the dictionary card's current dimen so taps over it aren't swallowed and this menu never overlaps it unnecessarily
 	style_id = nil, -- popup presentation style id; see getPopupStyleLayout
@@ -2841,15 +3104,20 @@ function FloatingActionMenu:init()
 	-- boxes showDict/onLookupWord receive): lets the card hug the selection
 	-- itself -- just above or just below it -- instead of floating all the
 	-- way at the screen edge like the full-width dictionary card does.
+	-- Left nil (skipping the loop below) when popup_position_mode is
+	-- "screen_edge", so the branch further down falls through to the plain
+	-- edge-anchored placement instead, same as the dictionary card.
 	local sel_left, sel_right, sel_top, sel_bottom
-	for _, box in ipairs(self.boxes or {}) do
-		if type(box) == "table" and box.x and box.y and box.w and box.h then
-			local x0, x1 = box.x, box.x + box.w
-			local y0, y1 = box.y, box.y + box.h
-			sel_left = sel_left and math.min(sel_left, x0) or x0
-			sel_right = sel_right and math.max(sel_right, x1) or x1
-			sel_top = sel_top and math.min(sel_top, y0) or y0
-			sel_bottom = sel_bottom and math.max(sel_bottom, y1) or y1
+	if self.popup_position_mode ~= POPUP_POSITION_SCREEN_EDGE then
+		for _, box in ipairs(self.boxes or {}) do
+			if type(box) == "table" and box.x and box.y and box.w and box.h then
+				local x0, x1 = box.x, box.x + box.w
+				local y0, y1 = box.y, box.y + box.h
+				sel_left = sel_left and math.min(sel_left, x0) or x0
+				sel_right = sel_right and math.max(sel_right, x1) or x1
+				sel_top = sel_top and math.min(sel_top, y0) or y0
+				sel_bottom = sel_bottom and math.max(sel_bottom, y1) or y1
+			end
 		end
 	end
 
@@ -3342,6 +3610,35 @@ function FloatingDictionary:genAppearanceMenu()
 			sub_item_table_func = function()
 				return self:genPopupStyleMenu()
 			end,
+		},
+		{
+			text_func = function()
+				local label = self:getPopupPositionMode() == POPUP_POSITION_SCREEN_EDGE
+					and _("Screen edge") or _("Near word")
+				return T(_("Popup position: %1"), label)
+			end,
+			sub_item_table = {
+				{
+					text = _("Near word (hug the selection)"),
+					radio = true,
+					checked_func = function()
+						return self:getPopupPositionMode() == POPUP_POSITION_NEAR_WORD
+					end,
+					callback = function()
+						self:setPopupPositionMode(POPUP_POSITION_NEAR_WORD)
+					end,
+				},
+				{
+					text = _("Screen edge (top/bottom, always)"),
+					radio = true,
+					checked_func = function()
+						return self:getPopupPositionMode() == POPUP_POSITION_SCREEN_EDGE
+					end,
+					callback = function()
+						self:setPopupPositionMode(POPUP_POSITION_SCREEN_EDGE)
+					end,
+				},
+			},
 			separator = true,
 		},
 		{
@@ -3448,6 +3745,16 @@ function FloatingDictionary:genContextMenuSettingsMenu()
 			end,
 		},
 		{
+			text = _("Enable small menu"),
+			checked_func = function()
+				return self:isSmallMenuEnabled()
+			end,
+			callback = function()
+				self:setSmallMenuEnabled(not self:isSmallMenuEnabled())
+			end,
+			help_text = _("Show the small Highlight / Add Note / Save for review menu next to a selection. This is independent from the floating dictionary card above: you can turn either one off on its own."),
+		},
+		{
 			text = _("Small menu buttons"),
 			sub_item_table_func = function()
 				return self:genSmallMenuButtonsMenu()
@@ -3540,7 +3847,28 @@ function FloatingDictionary:setCardHeightRatio(ratio)
 	return ratio
 end
 
--- Popup border thickness (pixels) and darkness (0.0-1.0), both persisted so
+-- Popup position mode ("near_word" or "screen_edge") -- see
+-- SETTING_POPUP_POSITION_MODE above for what each means. Same
+-- valid-value-guarding pattern as getSaveDestination: an unrecognized or
+-- unset saved value falls back to the default rather than being trusted
+-- as-is.
+function FloatingDictionary:getPopupPositionMode()
+	local saved = G_reader_settings:readSetting(SETTING_POPUP_POSITION_MODE)
+	if type(saved) == "string" and VALID_POPUP_POSITION_MODES[saved] then
+		return saved
+	end
+	return POPUP_POSITION_NEAR_WORD
+end
+
+function FloatingDictionary:setPopupPositionMode(mode)
+	if not VALID_POPUP_POSITION_MODES[mode] then
+		mode = POPUP_POSITION_NEAR_WORD
+	end
+	G_reader_settings:saveSetting(SETTING_POPUP_POSITION_MODE, mode)
+	return mode
+end
+
+
 -- they're remembered across lookups and app restarts. Applied to every
 -- dictionary popup card (see getPopupBorderColor below for the darkness ->
 -- color conversion).
@@ -3797,9 +4125,17 @@ function FloatingDictionary:genFontFamilyMenu()
 end
 
 -- Fancy highlight styles menu ----------------------------------------------
--- Lists the extra highlight/underline styles this plugin registers and lets
--- the user adjust each one's line thickness (except for the styles in
--- THICKNESS_MENU_EXCLUDED, which have no user-facing thickness control).
+-- Lists any fill/hatch style this plugin registers that ISN'T in
+-- LINE_STYLE_IDS, letting the user adjust its line thickness. In practice
+-- that's only solid_medium and solid_light now: every other fancy style
+-- (all 7 underlines plus crosshatch, both diagonal hatches, dotted fill,
+-- both grids, the thick outline, and the wavy fill) is a line/dot pattern
+-- and gets its Thickness+Darkness controls folded directly into its row in
+-- the native style picker instead (see genMergedHighlightStylesMenu), so a
+-- style never has to be found in two different places in the menu. The two
+-- solid fills stay here with nothing to show, since their look is
+-- controlled by stripe density (SOLID_MEDIUM_GAP/SOLID_LIGHT_GAP in the
+-- drawer above), not a line thickness or darkness.
 -- This is purely a settings UI on top of the LINE_THICKNESS table defined
 -- earlier in this file (used by the embedded fancy-highlight drawer); it
 -- does not add, remove, or rename any style, and does not touch how styles
@@ -3808,28 +4144,14 @@ end
 -- exactly as before.
 local THICKNESS_MENU_EXCLUDED = {
 	solid_medium = true,
-	grid_thick = true,
-	outline_thick = true,
-	crosshatch = true,
-	thick_underline = true,
-	dash_underline = true,
-	diagonal_thick = true,
-	diagonal_thin = true,
-	dotted_fill = true,
-	dotted_underline = true,
-	fine_underline = true,
-	grid_thin = true,
-	plain_underline = true,
 	solid_light = true,
-	wavy_fill = true,
-	wavy_underline = true,
 }
 
 function FloatingDictionary:genFancyHighlightStylesMenu()
 	local items = {}
 	for _idx, style in ipairs(FANCY_HIGHLIGHT_STYLE_LIST) do
 		local style_name, style_id = style[1], style[2]
-		if not THICKNESS_MENU_EXCLUDED[style_id] then
+		if not LINE_STYLE_IDS[style_id] and not THICKNESS_MENU_EXCLUDED[style_id] then
 			table.insert(items, {
 				text_func = function()
 					return T(_("%1 (thickness: %2)"), style_name, LINE_THICKNESS[style_id])
@@ -3845,19 +4167,26 @@ function FloatingDictionary:genFancyHighlightStylesMenu()
 end
 
 -- Merged "Highlight styles" menu ---------------------------------------------
--- What actually appears under Floating Dictionary -> Highlight styles.
--- Combines two things, in this order:
---   1. Every item from KOReader's own native "Highlights" menu (captured by
---      patchHighlightMenu -- style radio buttons with the ★ default marker,
---      color, gray opacity, line height, note marker, "apply to all", PDF
---      write-in toggle), completely unchanged: same text, same
---      checked/radio state, same callbacks (now trimmed: color, gray
---      opacity, line height and note marker removed; style names shown as
---      plain text; "Apply to all" moved to the front). This is the menu
---      that used to show up on its own at the top level; it now only shows
---      up here.
---   2. This plugin's own line-thickness controls for the fancy styles it
---      adds to that same style picker, via genFancyHighlightStylesMenu.
+-- What actually appears under Floating Dictionary -> Highlight styles: every
+-- item from KOReader's own native "Highlights" menu (captured by
+-- patchHighlightMenu -- style radio buttons, "Apply to all", PDF write-in
+-- toggle), in the same order, with the same checked/radio state and the
+-- same callbacks -- except that any row for one of this plugin's line/dot
+-- styles (LINE_STYLE_IDS -- the 7 underlines plus crosshatch, both
+-- diagonal hatches, dotted fill, both grids, the thick outline, and the
+-- wavy fill) is folded into a submenu right there, so picking that style
+-- AND adjusting it live in exactly one place instead of two: tapping "Fine
+-- underline" or "Grid" (say) opens
+--   - Use this style   (the exact same select/radio action the flat row
+--                        used to be -- picking a different style here
+--                        behaves exactly like the old flat radio group)
+--   - Darkness: X %
+--   - Thickness: N px
+-- and nothing else. Every other native row (native KOReader styles like
+-- Lighten/Invert/Underline/Strikeout, "Apply to all", PDF write-in) is
+-- left completely untouched. The two solid-fill styles (which have no line
+-- or dot to adjust) still get their own flat row afterwards, via
+-- genFancyHighlightStylesMenu, same as before.
 -- If the native items haven't been captured yet (e.g. this submenu is
 -- opened before any menu has triggered ReaderHighlight:addToMainMenu at
 -- least once), only the fancy-style thickness controls are shown; opening
@@ -3867,7 +4196,69 @@ function FloatingDictionary:genMergedHighlightStylesMenu()
 
 	if self.native_highlight_sub_items then
 		for _idx, item in ipairs(self.native_highlight_sub_items) do
-			table.insert(items, item)
+			local style_id = nil
+			local item_text = nil
+			if item.radio then
+				item_text = item.text
+				if not item_text and type(item.text_func) == "function" then
+					local ok_text, text_result = pcall(item.text_func)
+					if ok_text then
+						item_text = text_result
+					end
+				end
+				if item_text then
+					style_id = LINE_STYLE_NAME_TO_ID[item_text]
+				end
+			end
+
+			if style_id then
+				local style_name = item_text
+				local select_item = item
+				table.insert(items, {
+					text_func = function()
+						local is_selected = false
+						if type(select_item.checked_func) == "function" then
+							local ok_checked, result = pcall(select_item.checked_func)
+							is_selected = ok_checked and result or false
+						end
+						if is_selected then
+							return style_name .. " ★"
+						end
+						return style_name
+					end,
+					sub_item_table_func = function()
+						return {
+							{
+								text = _("Use this style"),
+								radio = true,
+								checked_func = select_item.checked_func,
+								callback = select_item.callback,
+							},
+							{
+								text_func = function()
+									local percent = math.floor(self:getLineDarkness(style_id) * 100 + 0.5)
+									return T(_("Darkness: %1 %"), percent)
+								end,
+								keep_menu_open = true,
+								callback = function(touchmenu_instance)
+									self:showLineDarknessDialog(style_id, style_name, touchmenu_instance)
+								end,
+							},
+							{
+								text_func = function()
+									return T(_("Thickness: %1 px"), LINE_THICKNESS[style_id])
+								end,
+								keep_menu_open = true,
+								callback = function(touchmenu_instance)
+									self:showFancyHighlightThicknessDialog(style_id, style_name, touchmenu_instance)
+								end,
+							},
+						}
+					end,
+				})
+			else
+				table.insert(items, item)
+			end
 		end
 		if #items > 0 then
 			items[#items].separator = true
@@ -3931,6 +4322,51 @@ function FloatingDictionary:showFancyHighlightThicknessDialog(style_id, style_na
 	}
 	UIManager:show(dialog)
 	dialog:onShowKeyboard()
+end
+
+-- Per-style line darkness (0.0-1.0), independent of thickness -- covers
+-- every LINE_STYLE_IDS style (the 7 underlines plus crosshatch, both
+-- diagonal hatches, dotted fill, both grids, the thick outline, and the
+-- wavy fill). See lineColor in the embedded fancy-highlight drawer above
+-- for how this turns into an actual paint color. Same persistence pattern
+-- as LINE_THICKNESS/getPopupBorderDarkness elsewhere in this file: a
+-- shared, module-level table (LINE_DARKNESS) kept in sync with
+-- G_reader_settings on every change.
+function FloatingDictionary:getLineDarkness(style_id)
+	local value = LINE_DARKNESS[style_id]
+	if type(value) ~= "number" then
+		return LINE_DARKNESS_DEFAULT
+	end
+	return value
+end
+
+function FloatingDictionary:setLineDarkness(style_id, darkness)
+	darkness = math.max(LINE_DARKNESS_MIN, math.min(LINE_DARKNESS_MAX, darkness or LINE_DARKNESS_DEFAULT))
+	LINE_DARKNESS[style_id] = darkness
+	saveLineDarkness()
+	return darkness
+end
+
+-- Picker for one line style's darkness, same SpinWidget pattern as
+-- showPopupBorderDarknessDialog below (0.0-1.0, one decimal place).
+function FloatingDictionary:showLineDarknessDialog(style_id, style_name, touchmenu_instance)
+	UIManager:show(SpinWidget:new{
+		title_text = T(_("%1 darkness"), style_name),
+		info_text = _("How dark or light this style's lines/dots are, from 0 (very light) to 1 (solid dark)."),
+		value = self:getLineDarkness(style_id),
+		value_min = LINE_DARKNESS_MIN,
+		value_max = LINE_DARKNESS_MAX,
+		value_step = LINE_DARKNESS_STEP,
+		value_hold_step = LINE_DARKNESS_STEP * 2,
+		precision = "%.1f",
+		ok_text = _("Set"),
+		callback = function(spin)
+			self:setLineDarkness(style_id, spin.value)
+			if touchmenu_instance then
+				touchmenu_instance:updateItems()
+			end
+		end,
+	})
 end
 
 -- Card height dialog -------------------------------------------------------
@@ -4768,9 +5204,165 @@ function FloatingDictionary:setSmartHighlightEnabled(enabled)
 	G_reader_settings:saveSetting(SETTING_SMART_HIGHLIGHT_ENABLED, enabled and true or false)
 end
 
--- The vocabulary-builder button only makes sense if that plugin is enabled.
+-- Master on/off switch for the small menu (FloatingActionMenu), independent
+-- from isPreviewEnabled (the floating dictionary card's own switch). See
+-- SETTING_SMALL_MENU_ENABLED above.
+function FloatingDictionary:isSmallMenuEnabled()
+	return G_reader_settings:nilOrTrue(SETTING_SMALL_MENU_ENABLED)
+end
+
+function FloatingDictionary:setSmallMenuEnabled(enabled)
+	G_reader_settings:saveSetting(SETTING_SMALL_MENU_ENABLED, enabled and true or false)
+end
+
+-- Direct integration with the Vocabulary Builder plugin (vocabulary.koplugin
+-- -- see vocabularybuilder_main.lua/vocabularyrepository.lua): rather than
+-- firing an event and hoping that plugin happens to listen for it, this
+-- plugin reaches directly into its VocabularyRepository module (the same
+-- one Vocabulary Builder's own "Learning"/"Mastered" screens read from) and
+-- writes there, so a word saved from this plugin actually shows up in
+-- Vocabulary Builder's own "Learning" list -- genuinely connected, not just
+-- a fire-and-forget notification.
+--
+-- Shared at module level (not per FloatingDictionary instance), same
+-- reasoning as fastdict_shared/modern_plugin_buttons_shared elsewhere in
+-- this file: the require + one-time :init() only need to happen once per
+-- app run, regardless of how many FloatingDictionary instances get created
+-- across documents.
+local vocabrepo_shared = {
+	tried = false, -- whether a require has already been attempted this run
+	repo = nil, -- the loaded VocabularyRepository module, or nil if unavailable
+	inited = false, -- whether VocabularyRepository:init() has been called yet
+}
+
+-- Loads (and memoizes) the Vocabulary Builder plugin's VocabularyRepository
+-- module. Returns nil, without erroring, when that plugin isn't installed --
+-- require("widget/vocabularyrepository") only resolves at all when
+-- vocabulary.koplugin's own directory has been added to package.path by
+-- KOReader's plugin loader, which only happens when that plugin is actually
+-- present. Only ever attempted once per app run (tried flag): a failed
+-- require doesn't mean "try again next time", since the set of installed
+-- plugins doesn't change without a restart.
+function FloatingDictionary:getVocabRepository()
+	if vocabrepo_shared.tried then
+		return vocabrepo_shared.repo
+	end
+	vocabrepo_shared.tried = true
+
+	local ok, repo = pcall(require, "widget/vocabularyrepository")
+	if ok and repo then
+		vocabrepo_shared.repo = repo
+	else
+		logger.dbg("FloatingDictionary: Vocabulary Builder not installed, skipping integration.")
+	end
+
+	return vocabrepo_shared.repo
+end
+
+-- Whether the Vocabulary Builder plugin is installed/enabled. Used
+-- internally by addSelectionToWordReview to decide whether a "Save for
+-- review" save should also be mirrored into that plugin; no longer used to
+-- hide/show any button, since Word Review itself always works regardless.
 function FloatingDictionary:hasVocabBuilder()
-	return self.ui and self.ui.vocabbuilder ~= nil
+	return self:getVocabRepository() ~= nil
+end
+
+-- Where a "Save for review" action stores the word: this plugin's own Word
+-- Review history, the Vocabulary Builder plugin's database, or both.
+-- Configurable ONLY through the settings menu (see WordReview:genMenu in
+-- wordreview.lua) -- never asked interactively at save time -- so tapping
+-- "Save for review" always stays a single, uninterrupted action.
+--
+-- Defaults to "both", matching this plugin's original (pre-setting)
+-- behavior, so upgrading users see no change until they deliberately pick
+-- something else.
+local SETTING_SAVE_DESTINATION = "floatingdictionary_save_destination"
+local SAVE_DESTINATION_WORD_REVIEW = "word_review"
+local SAVE_DESTINATION_VOCAB_BUILDER = "vocab_builder"
+local SAVE_DESTINATION_BOTH = "both"
+
+local VALID_SAVE_DESTINATIONS = {
+	[SAVE_DESTINATION_WORD_REVIEW] = true,
+	[SAVE_DESTINATION_VOCAB_BUILDER] = true,
+	[SAVE_DESTINATION_BOTH] = true,
+}
+
+-- Returns the currently configured destination. Falls back to Word Review
+-- when the saved choice is "vocab_builder" but that plugin is no longer
+-- installed (e.g. removed after the setting was picked), so a save never
+-- silently goes nowhere.
+function FloatingDictionary:getSaveDestination()
+	local saved = G_reader_settings:readSetting(SETTING_SAVE_DESTINATION)
+	if type(saved) == "string" and VALID_SAVE_DESTINATIONS[saved] then
+		if saved == SAVE_DESTINATION_VOCAB_BUILDER and not self:hasVocabBuilder() then
+			return SAVE_DESTINATION_WORD_REVIEW
+		end
+		return saved
+	end
+	return SAVE_DESTINATION_BOTH
+end
+
+function FloatingDictionary:setSaveDestination(destination)
+	if not VALID_SAVE_DESTINATIONS[destination] then
+		destination = SAVE_DESTINATION_BOTH
+	end
+	G_reader_settings:saveSetting(SETTING_SAVE_DESTINATION, destination)
+end
+
+-- Placeholder definition text used by mirrorWordToVocabBuilder below when a
+-- word has no real definition/context to store (a saved phrase with no
+-- dictionary match and no capturable surrounding context, for instance).
+-- Vocabulary Builder's own schema requires a non-empty definition for an
+-- entry to save at all, so *something* has to go there; this is short,
+-- plain, and honest about there being nothing else to show, rather than
+-- repeating the word itself as if it were its own definition.
+local VOCAB_BUILDER_NO_DEFINITION_TEXT = _("Not found.")
+
+-- Best-effort mirror of one saved word into Vocabulary Builder's own
+-- "learning" table (VocabularyRepository:saveLearning), so it shows up in
+-- that plugin's "Learning" screen exactly as if the user had added it there
+-- directly. Always non-fatal: any failure here (missing plugin, DB error,
+-- ...) is swallowed and logged, never surfaces as an error to the user, and
+-- never blocks the Word Review save this is called alongside.
+--
+-- definition_text, when given, is a short plain-text definition/context
+-- (already HTML-stripped -- see htmlToPlainText) to store alongside the
+-- word. When there isn't one, VOCAB_BUILDER_NO_DEFINITION_TEXT is stored
+-- instead so the entry still saves (see the module-level constant above).
+function FloatingDictionary:mirrorWordToVocabBuilder(word, definition_text)
+	local repo = self:getVocabRepository()
+	if not repo then
+		return false
+	end
+
+	if not vocabrepo_shared.inited then
+		local ok_init = pcall(function()
+			repo:init()
+		end)
+		vocabrepo_shared.inited = ok_init
+		if not ok_init then
+			return false
+		end
+	end
+
+	local definition = trim(definition_text or "")
+	if definition == "" then
+		definition = VOCAB_BUILDER_NO_DEFINITION_TEXT
+	end
+
+	local ok, err = pcall(function()
+		repo:saveLearning({
+			word = word,
+			definition = definition,
+			full_definition = definition,
+		})
+	end)
+	if not ok then
+		logger.warn("FloatingDictionary: mirroring word to vocabulary builder failed:", err)
+		return false
+	end
+
+	return true
 end
 
 -- Ordered list of actions that should currently render as footer buttons.
@@ -4790,11 +5382,10 @@ function FloatingDictionary:getVisibleActions()
 
 	local visible = {}
 	for _, action in ipairs(self:getOrderedActions()) do
-		local available = action.id ~= ACTION_VOCABULARY or self:hasVocabBuilder()
 		local hidden_by_language_mode = mode == DISPLAY_MODE_LANGUAGE
 			and (action.id == ACTION_WIKIPEDIA or action.id == ACTION_SEARCH_BOOK)
 
-		if available and not hidden_by_language_mode then
+		if not hidden_by_language_mode then
 			if mode == DISPLAY_MODE_FULL or self:isActionVisible(action.id) then
 				table.insert(visible, action)
 			end
@@ -4989,9 +5580,6 @@ function FloatingDictionary:genVisibleActionsMenu()
 				return T("%1. %2 (%3)", pos, action.label, visibility)
 			end,
 			radio = true,
-			enabled_func = function()
-				return action_id ~= ACTION_VOCABULARY or self:hasVocabBuilder()
-			end,
 			checked_func = function()
 				return self._action_order_selected == action_id
 			end,
@@ -5200,18 +5788,12 @@ function FloatingDictionary:showButtonSettingsMenu(on_close)
 	end
 
 	-- Number of rows the Buttons tab shows (fixed for a given install: all
-	-- actions plus the two nav arrows and the external-plugins group, minus
-	-- Vocabulary if that plugin isn't present). Used as the Font tab's page
-	-- size too, so both tabs always render the exact same box size.
+	-- actions plus the two nav arrows and the external-plugins group).
+	-- Used as the Font tab's page size too, so both tabs always render the
+	-- exact same box size.
 	local function getButtonsTabRowCount()
 		local ordered_actions = self:getOrderedActions()
-		local count = 0
-		for _, action in ipairs(ordered_actions) do
-			if action.id ~= ACTION_VOCABULARY or self:hasVocabBuilder() then
-				count = count + 1
-			end
-		end
-		return count
+		return #ordered_actions
 	end
 
 	local rebuild -- forward declaration, referenced by row callbacks below
@@ -5257,9 +5839,7 @@ function FloatingDictionary:showButtonSettingsMenu(on_close)
 		local ordered_actions = self:getOrderedActions()
 		local visible_ids = {}
 		for _, action in ipairs(ordered_actions) do
-			if action.id ~= ACTION_VOCABULARY or self:hasVocabBuilder() then
-				table.insert(visible_ids, action.id)
-			end
+			table.insert(visible_ids, action.id)
 		end
 
 		for list_pos, action_id in ipairs(visible_ids) do
@@ -5841,9 +6421,6 @@ function FloatingDictionary:patchDictionary()
 
 	dictionary.showDict = function(dict_self, word, results, boxes, link, dict_close_callback)
 		plugin.enabled = plugin:isPreviewEnabled()
-		if not plugin.enabled or plugin.opening_original_popup then
-			return plugin.original_showDict(dict_self, word, results, boxes, link, dict_close_callback)
-		end
 
 		-- Kobo-style selection interception ------------------------------
 		--
@@ -5858,17 +6435,16 @@ function FloatingDictionary:patchDictionary()
 		-- exactly as before, but now *also* gets the Highlight/Add Note
 		-- card alongside it, same as a multi-word phrase does.
 		--
-		-- IMPORTANT: this check must run *before* the "no results" bail-out
-		-- below. A multi-word phrase very often has no matching dictionary
-		-- headword at all (results is nil/empty), so gating this behind
-		-- "results[1] must exist" meant real phrase selections almost never
-		-- reached this branch -- they fell through to the plain
-		-- original_showDict call instead, which is exactly why the
-		-- Highlight/Add Note menu never appeared for a selected phrase.
-		-- Kobo (and now this plugin) shows that card regardless of whether
-		-- a definition was found, for both a word and a phrase, so the
-		-- check here must not depend on results or on isPhraseSelection at
-		-- all.
+		-- This check runs *before* the "floating dictionary enabled" and
+		-- "no results" checks below, on purpose: the small menu
+		-- (isSmallMenuEnabled) is its own independent on/off switch from
+		-- the floating dictionary card (isPreviewEnabled), so it must fire
+		-- even when the floating dictionary itself is turned off, or when a
+		-- multi-word phrase has no matching dictionary headword at all
+		-- (results is nil/empty). Kobo (and now this plugin) shows that
+		-- card regardless of whether a definition was found, for both a
+		-- word and a phrase, so the check here must not depend on results
+		-- or on isPhraseSelection at all.
 		--
 		-- This only ever applies to *root* selections made by the user's
 		-- own hold-and-drag gesture. Cross-reference lookups triggered by
@@ -5882,23 +6458,29 @@ function FloatingDictionary:patchDictionary()
 		-- Deliberately no `return` here: showFloatingActionMenuForSelection
 		-- shows the Highlight/Add Note card as a side effect and this then
 		-- falls straight through into the normal dictionary flow below, so
-		-- the definition card (if any match exists) and the Highlight/Add
-		-- Note card can both be visible at the same time, anchored to
-		-- opposite edges of the screen.
+		-- the definition card (if any match exists, and if the floating
+		-- dictionary is itself enabled) and the Highlight/Add Note card can
+		-- both be visible at the same time, anchored to opposite edges of
+		-- the screen.
 		--
-		-- Deferred by a tick rather than called inline: a fresh (non-cascade)
-		-- lookup falls through below into showPreview(), which synchronously
-		-- calls closeAllCards() to clear out any previous cascade -- and
-		-- closeAllCards() also closes action_menu_popup (see closeAllCards
-		-- above). Showing this card inline here meant it got created and then
-		-- immediately closed again in the very same call stack, before ever
-		-- reaching the screen. Scheduling it a tick later guarantees it runs
-		-- after that synchronous closeAllCards() has already happened.
+		-- Deferred by a tick rather than called inline: when the floating
+		-- dictionary is also enabled, this falls through below into
+		-- showPreview(), which synchronously calls closeAllCards() to clear
+		-- out any previous cascade -- and closeAllCards() also closes
+		-- action_menu_popup (see closeAllCards above). Showing this card
+		-- inline here meant it got created and then immediately closed
+		-- again in the very same call stack, before ever reaching the
+		-- screen. Scheduling it a tick later guarantees it runs after that
+		-- synchronous closeAllCards() has already happened.
 		local is_root_selection = link == nil and not plugin.pending_cascade_step
-		if is_root_selection and not plugin.native_dict_popup_active then
+		if is_root_selection and not plugin.native_dict_popup_active and plugin:isSmallMenuEnabled() then
 			UIManager:scheduleIn(0.05, function()
 				plugin:showFloatingActionMenuForSelection(dict_self, word, boxes, dict_close_callback, results)
 			end)
+		end
+
+		if not plugin.enabled or plugin.opening_original_popup then
+			return plugin.original_showDict(dict_self, word, results, boxes, link, dict_close_callback)
 		end
 
 		-- No dictionary match for what is (now confirmed) a single-word/
@@ -6116,6 +6698,21 @@ function FloatingDictionary:showFloatingActionMenuForSelection(dict_self, word, 
 		end
 	end
 
+	-- Plain-text definition (HTML-stripped) of the top dictionary match, if
+	-- any -- passed through to "Save for review" so a mirrored Vocabulary
+	-- Builder entry gets the actual definition instead of just the word
+	-- repeated back. Explicitly excludes no-result placeholder entries
+	-- (result.no_result -- see buildPreviewResults elsewhere in this file
+	-- for the same check), whose "definition" is just a "No results."-style
+	-- placeholder string, not real content: mirroring that in would have
+	-- silently stored "No results." as the word's definition. nil (not an
+	-- empty string) when there's no real match, so addSelectionToWordReview
+	-- falls back to its own captured context instead.
+	local review_definition = nil
+	if results and results[1] and not results[1].no_result and results[1].definition then
+		review_definition = htmlToPlainText(results[1].definition, 500)
+	end
+
 	-- Buttons shown are entirely user-configurable (up to
 	-- SMALL_MENU_MAX_BUTTONS, in the user's chosen order) -- see
 	-- genSmallMenuButtonsMenu / getSmallMenuButtonIds. Every candidate is a
@@ -6128,7 +6725,7 @@ function FloatingDictionary:showFloatingActionMenuForSelection(dict_self, word, 
 			table.insert(actions, {
 				text = spec.short_label or spec.label,
 				callback = function()
-					plugin:runSmallMenuAction(action_id, dict_self, word, review_word, dict_close_callback)
+					plugin:runSmallMenuAction(action_id, dict_self, word, review_word, dict_close_callback, review_definition)
 				end,
 			})
 		end
@@ -6142,6 +6739,7 @@ function FloatingDictionary:showFloatingActionMenuForSelection(dict_self, word, 
 		plugin = plugin,
 		anchor_top = not shouldAnchorTop(boxes),
 		boxes = boxes,
+		popup_position_mode = plugin:getPopupPositionMode(),
 		actions = actions,
 		-- Same visual configuration the dictionary card itself reads --
 		-- border thickness/color, font family, font size -- so both stay
@@ -6168,7 +6766,7 @@ end
 -- handlers. Kept as one place so genSmallMenuButtonsMenu's ids and this
 -- dispatch never drift apart, and so showFloatingActionMenuForSelection
 -- above doesn't need one hardcoded closure per possible action.
-function FloatingDictionary:runSmallMenuAction(action_id, dict_self, word, review_word, dict_close_callback)
+function FloatingDictionary:runSmallMenuAction(action_id, dict_self, word, review_word, dict_close_callback, review_definition)
 	self:closeActionMenu()
 
 	if action_id == SMALL_MENU_ACTION_HIGHLIGHT then
@@ -6178,7 +6776,7 @@ function FloatingDictionary:runSmallMenuAction(action_id, dict_self, word, revie
 	elseif action_id == SMALL_MENU_ACTION_ADD_NOTE then
 		return self:addNoteForSelection(dict_self, dict_close_callback)
 	elseif action_id == SMALL_MENU_ACTION_WORD_REVIEW then
-		return self:addSelectionToWordReview(review_word or word)
+		return self:addSelectionToWordReview(review_word or word, review_definition)
 	elseif action_id == SMALL_MENU_ACTION_WIKIPEDIA then
 		return self:lookupWikipedia(dict_self, word)
 	elseif action_id == SMALL_MENU_ACTION_TRANSLATE then
@@ -6318,18 +6916,36 @@ function FloatingDictionary:getSelectionContext(word)
 	return context
 end
 
--- Manually saves one word to this book's Word Review list (see
--- wordreview.lua). This is now the ONLY way a word ever gets added: the
--- small menu's dedicated button, never an automatic side effect of a normal
--- lookup. Deliberately does not clear the selection/highlight or invoke
--- dict_close_callback -- like the footer's "Add to vocabulary builder"
--- action, saving a word for review is a lightweight, non-destructive tag
+-- Manually saves one word, sending it to this book's Word Review list (see
+-- wordreview.lua), the Vocabulary Builder plugin's own database (see
+-- mirrorWordToVocabBuilder), or both, according to the user's configured
+-- save destination (see FloatingDictionary:getSaveDestination above -- set
+-- only via the settings menu, e.g. WordReview:genMenu's "Save destination"
+-- entry, never asked interactively here). This is the ONLY save action
+-- exposed anywhere in the UI (small menu's "Save" button, footer's "Save
+-- for review" button); which store(s) it actually reaches depends solely on
+-- that setting.
+--
+-- definition_hint, when given, is a short plain-text definition (already
+-- HTML-stripped by the caller, e.g. via htmlToPlainText) to store alongside
+-- the word in Vocabulary Builder -- callers that have an actual dictionary
+-- match on hand pass it through; callers that don't (e.g. a phrase with no
+-- headword) simply omit it, and the captured selection context is used
+-- instead. If neither is available, mirrorWordToVocabBuilder stores a short
+-- "Not found." placeholder rather than inventing a real definition.
+--
+-- Deliberately does not clear the selection/highlight or invoke
+-- dict_close_callback: saving a word is a lightweight, non-destructive tag
 -- that shouldn't end the current lookup session.
-function FloatingDictionary:addSelectionToWordReview(word)
+function FloatingDictionary:addSelectionToWordReview(word, definition_hint)
 	word = trim(word or "")
 	if word == "" then
 		return self:notify(_("Nothing to save."))
 	end
+
+	local destination = self:getSaveDestination()
+	local want_word_review = destination ~= SAVE_DESTINATION_VOCAB_BUILDER
+	local want_vocab_builder = destination ~= SAVE_DESTINATION_WORD_REVIEW
 
 	-- Best-effort: a failure to capture context must never block saving the
 	-- word itself, so this is deliberately its own pcall, separate from the
@@ -6341,12 +6957,36 @@ function FloatingDictionary:addSelectionToWordReview(word)
 		context = nil
 	end
 
-	local ok, err = pcall(function()
-		WordReview:recordLookup(self, word, context)
-	end)
-	if not ok then
-		logger.warn("FloatingDictionary: addSelectionToWordReview failed:", err)
+	local saved_to_word_review = false
+	if want_word_review then
+		local ok, err = pcall(function()
+			WordReview:recordLookup(self, word, context)
+		end)
+		if ok then
+			saved_to_word_review = true
+		else
+			logger.warn("FloatingDictionary: addSelectionToWordReview failed:", err)
+		end
+	end
+
+	-- Mirror into Vocabulary Builder, silently: best-effort and purely
+	-- additive, so an absent/failing vocab builder plugin never turns a
+	-- successful Word Review save into an error for the user.
+	local saved_to_vocab_builder = false
+	if want_vocab_builder then
+		saved_to_vocab_builder = self:mirrorWordToVocabBuilder(word, definition_hint or context)
+	end
+
+	if not saved_to_word_review and not saved_to_vocab_builder then
 		return self:notify(_("Could not save word for review."))
+	end
+
+	-- A single combined notification, worded to match exactly what landed
+	-- where, since from the user's point of view this is one save action.
+	if saved_to_word_review and saved_to_vocab_builder then
+		return self:notify(T(_("Added \"%1\" to Word Review and Vocabulary Builder."), word))
+	elseif saved_to_vocab_builder then
+		return self:notify(T(_("Added \"%1\" to Vocabulary Builder."), word))
 	end
 
 	return self:notify(T(_("Added \"%1\" to Word Review."), word))
@@ -6788,33 +7428,6 @@ function FloatingDictionary:translateText(search_text)
 	return true
 end
 
--- Adds the current word to the Vocabulary Builder plugin, using the same
--- "WordLookedUp" event that plugins/vocabbuilder.koplugin's own dictionary
--- button fires. This only runs when that plugin is actually enabled.
-function FloatingDictionary:addToVocabBuilder(dict_self, search_text)
-	if not self:hasVocabBuilder() then
-		return self:notify(_("Vocabulary builder is not available."))
-	end
-
-	search_text = trim(search_text)
-	if search_text == "" then
-		return self:notify(_("No word to add."))
-	end
-
-	local book_title = (self.ui.doc_props and self.ui.doc_props.display_title) or _("Dictionary lookup")
-
-	local ok, err = pcall(function()
-		self.ui:handleEvent(Event:new("WordLookedUp", search_text, book_title, true))
-	end)
-
-	if not ok then
-		logger.warn("FloatingDictionary: failed to add word to vocabulary builder:", err)
-		return self:notify(_("Could not add word to vocabulary builder."))
-	end
-
-	return self:notify(_("Added to vocabulary builder."))
-end
-
 -- Best-effort discovery of buttons that other installed plugins would add to
 -- the *original* dictionary popup via KOReader's "DictButtonsReady" event
 -- (the same core event plugins/vocabbuilder.koplugin and xray.koplugin use;
@@ -6972,7 +7585,7 @@ function FloatingDictionary:discoverExternalButtons(dict_self, word, result, res
 	return discovered
 end
 
-function FloatingDictionary:runAction(action_id, dict_self, search_text, dict_close_callback)
+function FloatingDictionary:runAction(action_id, dict_self, search_text, dict_close_callback, definition_text)
 	-- The card that triggered this was already closed by onActionButton;
 	-- any cards still stacked underneath it are no longer needed either,
 	-- since choosing an action (Highlight, Wikipedia, Search, ...) ends the
@@ -6987,9 +7600,14 @@ function FloatingDictionary:runAction(action_id, dict_self, search_text, dict_cl
 	elseif action_id == ACTION_WIKIPEDIA then
 		return self:lookupWikipedia(dict_self, search_text)
 	elseif action_id == ACTION_VOCABULARY then
-		local result = self:addToVocabBuilder(dict_self, search_text)
-		-- Keep the selection/highlight state around: unlike Highlight/Search,
-		-- adding to the vocabulary builder doesn't consume the selection.
+		-- "Save for review": records the word in Word Review and, as part of
+		-- the same save, mirrors it into Vocabulary Builder when available,
+		-- using definition_text (the current dictionary result's own
+		-- definition, already HTML-stripped by the caller) when one was
+		-- passed in (see addSelectionToWordReview). Keep the selection/
+		-- highlight state around: unlike Highlight/Search, saving doesn't
+		-- consume the selection.
+		local result = self:addSelectionToWordReview(search_text, definition_text)
 		return result
 	elseif action_id == ACTION_TRANSLATE then
 		-- Keep the selection/highlight state around, same reasoning as
@@ -7865,7 +8483,14 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 				table.insert(action_specs, {
 					spec = self:getActionIconSpec(action.id),
 					callback = function()
-						return self:runAction(action.id, dict_self, search_text, dict_close_callback)
+						-- Only "Save for review" actually uses this; computed
+						-- lazily here (not for every action) since it's the
+						-- current dictionary result's own definition, already
+						-- HTML-stripped, used to seed Vocabulary Builder's
+						-- entry when that plugin is installed.
+						local definition_text = action.id == ACTION_VOCABULARY
+							and htmlToPlainText(result.definition, 500) or nil
+						return self:runAction(action.id, dict_self, search_text, dict_close_callback, definition_text)
 					end,
 				})
 			end
@@ -7888,6 +8513,8 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 			dialog = dict_self and dict_self.dialog,
 			result_count = preview_count,
 			anchor_top = anchor_top,
+			boxes = boxes,
+			popup_position_mode = self:getPopupPositionMode(),
 			breadcrumb_labels = breadcrumb_labels,
 			breadcrumb_callback = function(index)
 				return self:onBreadcrumbSelect(index)

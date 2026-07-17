@@ -553,7 +553,7 @@ end
 -- below can open its screen with access to plugin.ui (to resolve the
 -- currently open book, if any -- see getKnownBookFiles).
 function WordReview:genMenu(plugin)
-	return {
+	local items = {
 		{
 			text = _("Manage saved words"),
 			keep_menu_open = true,
@@ -562,70 +562,132 @@ function WordReview:genMenu(plugin)
 			end,
 			separator = true,
 		},
-		{
-			text = _("Show review word when opening a book"),
-			checked_func = function()
-				return self:isEnabledOnOpen()
-			end,
-			callback = function()
-				self:setEnabledOnOpen(not self:isEnabledOnOpen())
-			end,
-		},
-		{
-			text = _("Show review word when waking from sleep"),
-			checked_func = function()
-				return self:isEnabledOnResume()
-			end,
-			callback = function()
-				self:setEnabledOnResume(not self:isEnabledOnResume())
-			end,
-			separator = true,
-		},
-		{
-			text_func = function()
-				local mode = self:getReviewSourceMode()
-				local label = _("Both")
-				if mode == self.SOURCE_MODE_SAVED then
-					label = _("Only saved words")
-				elseif mode == self.SOURCE_MODE_RANDOM then
-					label = _("Only random words")
-				end
-				return T(_("Word source: %1"), label)
-			end,
-			sub_item_table = {
-				{
-					text = _("Only saved words"),
-					radio = true,
-					checked_func = function()
-						return self:getReviewSourceMode() == self.SOURCE_MODE_SAVED
-					end,
-					callback = function()
-						self:setReviewSourceMode(self.SOURCE_MODE_SAVED)
-					end,
-				},
-				{
-					text = _("Only random words"),
-					radio = true,
-					checked_func = function()
-						return self:getReviewSourceMode() == self.SOURCE_MODE_RANDOM
-					end,
-					callback = function()
-						self:setReviewSourceMode(self.SOURCE_MODE_RANDOM)
-					end,
-				},
-				{
-					text = _("Both"),
-					radio = true,
-					checked_func = function()
-						return self:getReviewSourceMode() == self.SOURCE_MODE_BOTH
-					end,
-					callback = function()
-						self:setReviewSourceMode(self.SOURCE_MODE_BOTH)
-					end,
-				},
+	}
+
+	-- Always shown, so the setting's existence isn't a mystery even before
+	-- Vocabulary Builder is installed -- but dimmed and non-interactive
+	-- (enabled_func) in that case, with a label explaining why, rather than
+	-- offering choices that would silently do nothing. This is the only
+	-- place this choice can be made -- never as an interactive prompt at
+	-- save time -- so saving a word always stays a single, uninterrupted
+	-- tap (see main.lua:addSelectionToWordReview).
+	table.insert(items, {
+		text_func = function()
+			if not plugin:hasVocabBuilder() then
+				return _("Save destination (requires Vocabulary Builder)")
+			end
+			local destination = plugin:getSaveDestination()
+			local label = _("Both")
+			if destination == "word_review" then
+				label = _("Word Review only")
+			elseif destination == "vocab_builder" then
+				label = _("Vocabulary Builder only")
+			end
+			return T(_("Save destination: %1"), label)
+		end,
+		enabled_func = function()
+			return plugin:hasVocabBuilder()
+		end,
+		sub_item_table = {
+			{
+				text = _("Word Review only"),
+				radio = true,
+				checked_func = function()
+					return plugin:getSaveDestination() == "word_review"
+				end,
+				callback = function()
+					plugin:setSaveDestination("word_review")
+				end,
+			},
+			{
+				text = _("Vocabulary Builder only"),
+				radio = true,
+				checked_func = function()
+					return plugin:getSaveDestination() == "vocab_builder"
+				end,
+				callback = function()
+					plugin:setSaveDestination("vocab_builder")
+				end,
+			},
+			{
+				text = _("Both"),
+				radio = true,
+				checked_func = function()
+					return plugin:getSaveDestination() == "both"
+				end,
+				callback = function()
+					plugin:setSaveDestination("both")
+				end,
 			},
 		},
-	}
+		separator = true,
+	})
+
+	table.insert(items, {
+		text = _("Show review word when opening a book"),
+		checked_func = function()
+			return self:isEnabledOnOpen()
+		end,
+		callback = function()
+			self:setEnabledOnOpen(not self:isEnabledOnOpen())
+		end,
+	})
+	table.insert(items, {
+		text = _("Show review word when waking from sleep"),
+		checked_func = function()
+			return self:isEnabledOnResume()
+		end,
+		callback = function()
+			self:setEnabledOnResume(not self:isEnabledOnResume())
+		end,
+		separator = true,
+	})
+	table.insert(items, {
+		text_func = function()
+			local mode = self:getReviewSourceMode()
+			local label = _("Both")
+			if mode == self.SOURCE_MODE_SAVED then
+				label = _("Only saved words")
+			elseif mode == self.SOURCE_MODE_RANDOM then
+				label = _("Only random words")
+			end
+			return T(_("Word source: %1"), label)
+		end,
+		sub_item_table = {
+			{
+				text = _("Only saved words"),
+				radio = true,
+				checked_func = function()
+					return self:getReviewSourceMode() == self.SOURCE_MODE_SAVED
+				end,
+				callback = function()
+					self:setReviewSourceMode(self.SOURCE_MODE_SAVED)
+				end,
+			},
+			{
+				text = _("Only random words"),
+				radio = true,
+				checked_func = function()
+					return self:getReviewSourceMode() == self.SOURCE_MODE_RANDOM
+				end,
+				callback = function()
+					self:setReviewSourceMode(self.SOURCE_MODE_RANDOM)
+				end,
+			},
+			{
+				text = _("Both"),
+				radio = true,
+				checked_func = function()
+					return self:getReviewSourceMode() == self.SOURCE_MODE_BOTH
+				end,
+				callback = function()
+					self:setReviewSourceMode(self.SOURCE_MODE_BOTH)
+				end,
+			},
+		},
+	})
+
+	return items
 end
 
 -------------------------------------------------------------------------------
