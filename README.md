@@ -1,64 +1,89 @@
 # Floating Dictionary EN/ES
 
-A lightweight, highly customizable floating dictionary for KOReader.
+A lightweight, fully customizable floating dictionary for KOReader.
 
-Instead of opening KOReader's full dictionary popup every time, Floating Dictionary displays a compact preview beside your selection, allowing you to continue reading without breaking your flow.
+Floating Dictionary replaces the traditional dictionary workflow with a faster reading experience. Instead of opening KOReader's full dictionary window every time, it displays a compact floating preview directly beside your text selection while keeping the book visible.
 
----
-
-# Why?
-
-KOReader's built-in dictionary is excellent for reading long entries, but most lookups only need a quick reminder.
-
-Floating Dictionary adds an intermediate step:
-
-> **Tap a word → Read the definition → Continue reading**
-
-Open KOReader's full dictionary only when you actually need it.
+Designed for language learners, heavy readers and dictionary users.
 
 ---
 
 # Features
 
-## Floating Preview
+## Floating Dictionary
 
-- Compact popup
-- Shows the word, dictionary and definition
+- Compact floating popup
 - Doesn't interrupt reading
+- Fast dictionary preview
 - Tap outside to dismiss
+- Scrollable definitions
+- Automatic word detection
+- Multiple dictionaries supported
+- Instant popup refresh
 
-### Popup Styles
+---
 
-Choose the appearance you prefer.
+# Popup Styles
+
+Choose the interface you prefer.
 
 | Style | Description |
 |-------|-------------|
-| **Classic** | Original Floating Dictionary interface |
-| **Kobo** | Kobo-inspired layout with compact toolbar and cleaner typography |
+| Classic | Original Floating Dictionary interface |
+| Kobo | Kobo-inspired layout |
 
-### Display Modes
+Each style includes its own:
 
-Switch the interface instantly.
+- Typography
+- Spacing
+- Borders
+- Header layout
+- Footer layout
+- Dictionary formatting
 
-| Mode | Purpose |
-|------|---------|
-| **Personal** | Uses your saved configuration |
-| **Minimal** | Hides the footer |
-| **Full** | Shows every available feature |
-| **Language Learner** | Translation-first layout |
+---
 
-> Changing modes never overwrites your **Personal** configuration.
+# Display Modes
 
-### Popup Customization
+Floating Dictionary supports multiple interface profiles.
 
-Personalize the popup to match your device.
+| Mode | Description |
+|------|-------------|
+| Personal | Uses your own configuration |
+| Minimal | Hides footer actions |
+| Full | Displays every available action |
+| Language Learner | Translation-first interface |
 
-| Appearance | Appearance |
-|------------|------------|
-| Font | Popup height |
-| Font size | Border thickness |
-| Border darkness | Popup style |
-| Automatic book font | Custom CRE font |
+Switching modes never overwrites your Personal configuration.
+
+---
+
+# Popup Customization
+
+Completely personalize the popup.
+
+## Appearance
+
+- Font family
+- Automatic book font detection
+- Custom CRE font
+- Popup font size
+- Popup height
+- Popup border thickness
+- Popup border darkness
+- Rounded borders
+
+## Position
+
+Choose how the popup appears.
+
+- Near selected word
+- Screen edge
+
+Automatic positioning:
+
+- Above selection
+- Below selection
 
 ---
 
@@ -66,9 +91,9 @@ Personalize the popup to match your device.
 
 ## Cascading Lookups
 
-Explore definitions naturally without losing context.
+Navigate definitions naturally.
 
-### Example
+Example
 
 ```text
 Book
@@ -78,200 +103,260 @@ Dog
 Fur
  ↓
 DNA
+ ↓
+Cell
 ```
 
+Features:
+
+- Unlimited lookup chain
 - Breadcrumb navigation
-- Automatic stack limit
+- Automatic history trimming
 - Animated back navigation
-- Continue reading without closing popups
+- Previous definitions remain accessible
 
 ---
 
-## Phrase & Word Selection
+## Breadcrumb Navigation
 
-Select a single word or a whole phrase and get the right tools either way.
+Displays every lookup in the current session.
 
-| Dictionary Popup | Highlight / Add Note |
-|------------------|----------------------|
-| Shown side by side | Works for single words too |
-| Kobo-style selection card | No need to choose between looking up or annotating |
+Features
 
-Selecting a multi-word phrase no longer replaces the dictionary lookup with the Highlight/Add Note prompt. Both appear together, anchored to opposite edges of the screen, so you can read the definition and highlight or annotate the same selection without reopening the menu.
-
----
-
-## Smart Highlight
-
-Automatically highlight longer text selections without opening any popup.
-
-Enable it from:
-
-```text
-KOReader Menu → Floating Dictionary → Context Menu → Smart Highlight
-```
-
-When enabled, Floating Dictionary analyzes the selection before opening any interface:
-
-- **Single word** → Opens Floating Dictionary normally.
-- **Hyphenated word** (`-`, `–`, `—`) → Opens Floating Dictionary normally.  
-  Examples: `mother-in-law`, `well-known`, `Spanish–English`.
-- **Two or more words** → Immediately creates a highlight.
-
-When Smart Highlight activates:
-
-- No dictionary popup appears.
-- No Floating Dictionary context menu appears.
-- No additional confirmation is required.
-- The highlight is created instantly using your current highlight settings, including custom highlight styles configured through Floating Dictionary.
+- Current word indicator
+- Previous lookup history
+- Automatic ellipsis for long chains
+- One-tap back navigation
 
 ---
 
-## Smarter Dictionary Ordering
+## Multiple Dictionaries
 
-Floating Dictionary automatically improves dictionary results.
+Works with every installed KOReader dictionary.
 
-| Automatic | Manual |
-|-----------|--------|
-| Detects word language | Reorder every installed dictionary |
-| Detects translation dictionaries | Works with every dictionary type |
-| Definition dictionaries first | Unconfigured dictionaries keep KOReader's order |
-| Fully offline | Future dictionary types supported |
+Supports:
+
+- Definition dictionaries
+- Translation dictionaries
+- Bilingual dictionaries
+- Thesaurus
+- Synonyms
+- Antonyms
+- Pronunciation dictionaries
+- Conjugation dictionaries
+- Etymology dictionaries
+- Any StarDict compatible dictionary
+
+---
+
+## Automatic Dictionary Ordering
+
+Floating Dictionary automatically improves lookup quality.
+
+Features
+
+- Language detection
+- Translation dictionary detection
+- Automatic prioritization
+- Offline operation
+- Works without configuration
+
+---
+
+## Manual Dictionary Order
+
+If preferred, dictionaries can be reordered manually.
+
+Features
+
+- Move up
+- Move down
+- Persistent order
+- Works with every installed dictionary
 
 ---
 
 ## Dictionary Navigation
 
-When multiple dictionaries contain a result:
+When multiple dictionaries return results.
 
-- Previous / Next buttons
-- Swipe gestures
-- Live dictionary counter
-- Navigation buttons automatically disable when unavailable
+Features
+
+- Previous dictionary
+- Next dictionary
+- Swipe navigation
+- Dictionary counter
+- Disabled buttons at limits
 
 ---
 
-# Toolbar & Actions
+# Phrase & Word Selection
 
-## Footer Customization
+Supports both single words and complete phrases.
 
-Every button can be configured independently.
+Single word:
 
-| Feature | Feature |
-|---------|---------|
-| Show / Hide | Reorder |
-| Rename | Custom SVG icon |
-| Live preview | Per-button settings |
+- Floating Dictionary
+- Highlight
+- Add note
+- Translation
 
-Custom SVG icons are loaded from:
+Multiple words:
+
+- Floating Dictionary
+- Highlight
+- Add note
+
+Both interfaces appear simultaneously.
+
+---
+
+# Smart Highlight
+
+Automatically highlights long selections.
+
+When enabled:
+
+Single word
+
+→ Floating Dictionary
+
+Hyphenated word
+
+→ Floating Dictionary
+
+Multiple words
+
+→ Highlight immediately
+
+No popup appears.
+
+No confirmation required.
+
+---
+
+# Footer Toolbar
+
+Fully configurable toolbar.
+
+Every button supports:
+
+- Show / Hide
+- Reorder
+- Rename
+- Custom SVG icon
+- Live preview
+
+---
+
+# Built-in Actions
+
+Included buttons:
+
+- Highlight
+- Translate
+- Wikipedia
+- Full Text Search
+- Save for Review
+- Vocabulary Builder
+
+---
+
+# External Plugin Integration
+
+Automatically detects buttons registered by other dictionary plugins.
+
+Compatible with:
+
+- X-Ray
+- Future dictionary plugins
+- Custom plugin actions
+
+No configuration required.
+
+---
+
+# Custom SVG Icons
+
+Replace button letters with your own icons.
+
+Icons are loaded from:
 
 ```text
 floatingdictionary-images/
 ```
 
----
+Supported:
 
-## Built-in Actions
-
-- ✓ Highlight
-- ✓ Translate
-- ✓ Wikipedia
-- ✓ Full-text Search
-- ✓ Vocabulary Builder
-- ✓ Save for Review
-- ✓ External Plugin Buttons
-
-Buttons added by other dictionary plugins are detected automatically.
+- SVG
+- Live reload
+- Per-button icons
 
 ---
 
 # Highlight Integration
 
-Floating Dictionary fully integrates KOReader's highlight settings.
+Fully integrated with KOReader.
 
-| Option | Option |
-|--------|--------|
-| Style | Color |
-| Opacity | Line height |
-| Note marker | Apply to all highlights |
-| PDF write-in | Instant refresh |
+Supports:
 
-No page reload is required.
+- Highlight style
+- Highlight color
+- Highlight opacity
+- Line height
+- Note markers
+- PDF write-in
+- Instant refresh
 
-## Built-in Highlight Styles
+No page reload required.
 
-### Fill Styles
+---
+
+# Highlight Styles
+
+Includes many built-in styles.
+
+## Fill
 
 - Solid Medium
 - Solid Light
-- Grid Thin
-- Grid Thick
+- Grid
 - Dotted
-- Outline Thick
-- Diagonal Thin
-- Diagonal Thick
+- Diagonal
 - Crosshatch
+- Outline Thick
 - Wavy Fill
 
-### Underline Styles
+## Underline
 
 - Plain
 - Fine
 - Thick
 - Dash
 - Dotted
+- Double
 - Wavy
 
-> Every style supports configurable line thickness.
+Every line-based style supports:
+
+- Thickness
+- Darkness
 
 ---
 
-# Word Review
+# Popup Animations
 
-A lightweight vocabulary-building system inspired by Kindle's Vocabulary Builder.
+Optional page-turn inspired animations.
 
-## Automatic Reviews
+Features
 
-Previously searched words can automatically appear:
+- Opening animation
+- Closing animation
+- Swipe direction
+- Hardware fallback
+- Software fallback
 
-- When opening a book
-- When waking the device
-- Per-book history
-- Easy history management
-
-Floating Dictionary automatically remembers the resolved dictionary entry whenever possible, improving future reviews.
-
----
-
-## Save for Review
-
-Instead of saving every lookup automatically, you can now explicitly bookmark words using the **Save for Review** button.
-
-### Manage Saved Words
-
-| Feature | Feature |
-|---------|---------|
-| Cross-book word list | Words / Random / Mastered tabs |
-| Multi-select | Bulk delete |
-| Saved context sentence | Mark words as mastered |
-
-Choose whether automatic reviews use:
-
-- Saved words only
-- Random dictionary headwords only
-- A mix of both
-
----
-
-## Flashcards
-
-Study saved words one card at a time.
-
-- Word and context sentence
-- **See Definition** (inline dictionary lookup)
-- Mark as Mastered
-- Delete from the card
-- Target word shown *italicized* inside its original sentence
-- Jump to a random word from any book
+Can be disabled completely.
 
 ---
 
@@ -279,26 +364,151 @@ Study saved words one card at a time.
 
 Optional in-process dictionary engine.
 
-| Feature | Feature |
-|---------|---------|
-| Near-instant lookups | No external `sdcv` process |
-| Lower latency | Built-in index manager |
-| Automatic fallback | Never breaks searches |
+Benefits
 
-The index manager shows which dictionaries use FastDict and which continue using KOReader's standard engine.
+- Near-instant lookups
+- No external sdcv process
+- Lower latency
+- Automatic fallback
+- Compatible with normal dictionaries
+
+---
+
+# Word Review
+
+Vocabulary review system inspired by Kindle Vocabulary Builder.
+
+Features
+
+- Automatic review popup
+- Per-book history
+- Cross-book history
+- Lookup frequency tracking
+- Context sentence
+- Automatic word selection
+
+Can appear:
+
+- When opening a book
+- After waking the device
+
+---
+
+# Save for Review
+
+Save only important words.
+
+Manage:
+
+- Saved words
+- Random words
+- Mastered words
+
+Features
+
+- Multi-select
+- Bulk delete
+- Context sentence
+- Cross-book storage
+- Mark mastered
+
+---
+
+# Flashcards
+
+Study saved vocabulary.
+
+Each card contains:
+
+- Word
+- Context sentence
+- Dictionary definition
+- Previous dictionary
+- Next dictionary
+
+Actions
+
+- See Definition
+- Mark Mastered
+- Delete
+- Random Word
+
+Target word appears italicized inside its original sentence.
+
+---
+
+# Vocabulary Management
+
+Built-in management interface.
+
+Features
+
+- Kindle-inspired UI
+- Tabs
+- Search history
+- Mastered words
+- Saved words
+- Random words
+- Flashcards
+
+---
+
+# Language Detection
+
+Automatically detects the language of the selected word.
+
+Used for:
+
+- Dictionary ordering
+- Translation priority
+- Better lookup accuracy
+
+Works fully offline.
+
+---
+
+# Reader Integration
+
+Deep integration with KOReader.
+
+Supports:
+
+- Built-in dictionary
+- Built-in translator
+- Built-in highlights
+- Notes
+- Full-text search
+- Vocabulary Builder
+- Page animations
+
+---
+
+# Performance
+
+Optimized for eInk devices.
+
+Features
+
+- Low memory usage
+- Instant popup refresh
+- Fast redraw
+- Scrollable definitions
+- Cached rendering
+- Minimal CPU usage
 
 ---
 
 # Installation
 
-1. Download or clone this repository.
-2. Copy:
+1. Download this repository.
+
+2. Copy
 
 ```text
 floatingdictionary.koplugin
 ```
 
-into:
+into
 
 ```text
 plugins/
@@ -310,22 +520,31 @@ plugins/
 
 # Usage
 
-1. Tap or select a word.
+1. Select a word.
 2. Read the floating definition.
-3. Tap another word inside the definition to continue exploring.
-4. Navigate previous lookups with the breadcrumb.
-5. Switch dictionaries using swipe gestures or navigation buttons.
-6. Use the footer to highlight, translate, search, save words, open Wikipedia or launch external plugin actions.
-7. Tap outside the popup to dismiss it.
+3. Tap another word inside the definition.
+4. Continue navigating.
+5. Swipe between dictionaries.
+6. Use toolbar actions.
+7. Tap outside to close.
 
 ---
 
 # Compatibility
 
-| ✓ Supported | ✓ Supported |
-|-------------|-------------|
-| Recent KOReader releases | Built-in Translator |
-| Vocabulary Builder | Every CRE font |
-| External dictionary plugins | Offline translation detection |
-| Built-in page-turn animations | Built-in highlight styles |
-| FastDict fallback | No external patches required |
+Supports
+
+- Recent KOReader releases
+- Every CRE font
+- EPUB
+- FB2
+- TXT
+- HTML
+- PDF
+- Built-in Translator
+- Vocabulary Builder
+- External dictionary plugins
+- FastDict
+- Offline dictionaries
+
+No external patches required.
