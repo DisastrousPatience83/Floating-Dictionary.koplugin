@@ -465,10 +465,4 @@ Found a bug or have an idea? Open an **issue** or a **pull request** in this rep
 
 ---
 
-## 📄 License
-
-*(Add your chosen license here — e.g. MIT, GPLv3 — matching KOReader's own plugin licensing conventions if applicable.)*
-
----
-
 <p align="center">Made with 📖 for KOReader readers.</p>
