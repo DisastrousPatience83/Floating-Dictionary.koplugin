@@ -893,6 +893,16 @@ local CUSTOM_ICONS_DIR_NAME = "floatingdictionary-images"
 -- getDictionaryOrderSetting/moveDictionaryInOrder/genDictionaryOrderMenu and
 -- sortResultsByDictionaryOrder below.
 local SETTING_DICTIONARY_ORDER = "floatingdictionary_dictionary_order"
+-- Per-book override: when true, THIS book's own sidecar/docsettings holds
+-- its own copy of SETTING_DICTIONARY_ORDER (same key, different storage --
+-- self.ui.doc_settings instead of G_reader_settings), consulted instead of
+-- the global order above. Lets a Spanish book prioritize a Spanish
+-- dictionary while an English book keeps prioritizing an English one,
+-- without the two fighting over a single global order. Off by default, so
+-- every book keeps using the one global order exactly as before until the
+-- user explicitly turns this on for a specific book. See
+-- hasPerBookDictionaryOrder/setPerBookDictionaryOrderEnabled below.
+local SETTING_DICTIONARY_ORDER_OVERRIDE = "floatingdictionary_dictionary_order_override"
 local SETTING_SHOW_EXTERNAL_BUTTONS = "floatingdictionary_show_external_buttons"
 -- Smart Highlight: when enabled, a 2+ word selection is silently turned into
 -- a plain KOReader highlight (no dictionary popup, no FloatingActionMenu,
@@ -2797,7 +2807,25 @@ function FloatingDictionaryPopup:onHoldReleaseText(_arg, ges)
 	end, ges)
 
 	if selected_text and selected_text ~= "" and self.lookup_word_callback then
-		self.lookup_word_callback(selected_text)
+		-- Construimos una caja aproximada alrededor del punto donde soltó
+		-- el dedo, del mismo tipo de tabla que las boxes reales de una
+		-- selección en el libro (x/y/w/h en coordenadas de pantalla), para
+		-- que el siguiente popup de la cascada pueda "abrazar" esa posición
+		-- en vez de caer al modo de anclaje fijo arriba/abajo de pantalla
+		-- (ver el fallback "No usable selection boxes" en
+		-- FloatingDictionaryPopup:init()).
+		local selection_box = nil
+		if ges and ges.pos then
+			local box_w = Screen:scaleBySize(60)
+			local box_h = Screen:scaleBySize(24)
+			selection_box = {
+				x = ges.pos.x - box_w / 2,
+				y = ges.pos.y - box_h / 2,
+				w = box_w,
+				h = box_h,
+			}
+		end
+		self.lookup_word_callback(selected_text, selection_box)
 	end
 
 	return ok
@@ -3166,16 +3194,30 @@ function FloatingActionMenu:init()
 			-- Tier 1, anchored bottom.
 			target_y = bottom_candidate
 		else
-			-- Tier 2: try the dictionary's own side instead, stacked flush
-			-- against its card rather than on top of it.
-			local same_side_candidate = self.anchor_top and bottom_candidate or top_candidate
-
-			if overlapsDict(same_side_candidate) then
-				if same_side_candidate < dict_dimen.y then
-					same_side_candidate = dict_dimen.y - gap - card_h
-				else
-					same_side_candidate = dict_dimen.y + dict_dimen.h + gap
-				end
+			-- Tier 2: stack on the dictionary's own side, but BEYOND its
+			-- card -- past its far edge, further away from the selection --
+			-- rather than between the dictionary and the selection. This is
+			-- deliberately deterministic (no "which direction do I need to
+			-- push this in" branching): the dictionary card, when it's
+			-- present, is always immediately adjacent to the selection
+			-- (gap-separated, same as top_candidate/bottom_candidate would
+			-- be), so the only spot on the dictionary's side that can never
+			-- overlap the selection itself is right past the dictionary's
+			-- own far edge. An earlier version of this tier could, when the
+			-- selection sat very close to a screen edge, end up computing a
+			-- position that landed back on top of the selected word instead
+			-- of past the dictionary card -- this fixes that.
+			local same_side_candidate
+			if dict_dimen then
+				same_side_candidate = self.anchor_top
+					and (dict_dimen.y + dict_dimen.h + gap) -- dictionary is below the selection: stack further below, past it
+					or (dict_dimen.y - gap - card_h) -- dictionary is above the selection: stack further above, past it
+			else
+				-- No dictionary card on screen to stack against (e.g. the
+				-- floating dictionary card is disabled, or hasn't painted
+				-- yet): fall back to the plain hugging position on that
+				-- same side.
+				same_side_candidate = self.anchor_top and bottom_candidate or top_candidate
 			end
 
 			local same_side_fits = same_side_candidate >= screen_margin
@@ -3312,6 +3354,21 @@ function FloatingDictionary:init()
 	self._suspended = false
 	self.pending_word_review_task = nil
 	self.action_menu_popup = nil -- currently shown FloatingActionMenu (Highlight/Add Note card for a phrase selection), if any
+
+	-- Tracks whichever word/definition the FULL dictionary popup (the card
+	-- with the footer buttons, not the small Highlight/Add Note menu) is
+	-- CURRENTLY displaying -- i.e. whatever the user last swiped/paged to,
+	-- possibly a different installed dictionary than the one the lookup
+	-- started on. Updated every time renderCascadeFrame's showResult(index)
+	-- runs (see below). The small menu's own "Save for review" button reads
+	-- these instead of the word resolved at the moment the small menu was
+	-- first built, so it always saves whatever is actually on screen instead
+	-- of always the first-ranked dictionary's entry, no matter which page
+	-- the user paged to afterwards. Reset to nil whenever a fresh, non-
+	-- cascaded lookup starts (see showFloatingActionMenuForSelection), so a
+	-- stale word from a previous session/word is never used as a fallback.
+	self.current_preview_word = nil
+	self.current_preview_definition = nil
 
 	-- Cascade state: ordered list of frames { word, results, boxes, link,
 	-- dict_close_callback } representing the trail of lookups in the current
@@ -3712,7 +3769,12 @@ end
 function FloatingDictionary:genDictionaryMenu()
 	return {
 		{
-			text = _("Dictionary order"),
+			text_func = function()
+				if self:hasPerBookDictionaryOrder() then
+					return _("Dictionary order (custom for this book)")
+				end
+				return _("Dictionary order")
+			end,
 			sub_item_table_func = function()
 				return self:genDictionaryOrderMenu()
 			end,
@@ -4233,6 +4295,21 @@ function FloatingDictionary:genMergedHighlightStylesMenu()
 								radio = true,
 								checked_func = select_item.checked_func,
 								callback = select_item.callback,
+								-- Long-press = "set as default", exactly like KOReader's
+								-- own native style picker. This is what was missing
+								-- before: only checked_func/callback were copied over
+								-- from the native item, so selecting a style (e.g.
+								-- "Double underline") never actually persisted as the
+								-- default for new books -- there was simply no way to
+								-- trigger the native "set as default" action anymore,
+								-- since it lived on a menu row that this plugin now
+								-- nests one level deeper, behind its own submenu.
+								-- Forwarding these two fields (both optional/may be
+								-- nil for native styles that don't support this) makes
+								-- the long-press behave exactly as it did in KOReader's
+								-- original, un-merged "Highlights" menu.
+								hold_callback = select_item.hold_callback,
+								hold_callback_text = select_item.hold_callback_text,
 							},
 							{
 								text_func = function()
@@ -4980,6 +5057,54 @@ end
 -- that no longer corresponds to an installed dictionary (uninstalled since)
 -- is silently dropped -- exactly the same "stays in sync automatically"
 -- behavior already used for the footer-button order.
+-- Whether THIS book currently has its own per-book dictionary order
+-- override enabled (see SETTING_DICTIONARY_ORDER_OVERRIDE above). Guards
+-- every access to self.ui.doc_settings so this degrades gracefully (falls
+-- back to the global order) on a docless context or any older/unusual
+-- KOReader build where doc_settings might be unavailable.
+function FloatingDictionary:hasPerBookDictionaryOrder()
+	if not (self.ui and self.ui.doc_settings) then
+		return false
+	end
+	local ok, result = pcall(function()
+		return self.ui.doc_settings:isTrue(SETTING_DICTIONARY_ORDER_OVERRIDE)
+	end)
+	return ok and result or false
+end
+
+-- Turns the per-book override on/off for the CURRENT book. Turning it on
+-- seeds the book's own order from whatever order is currently in effect
+-- (the global default, or a previous per-book order if one already existed)
+-- so switching this on never resets the user back to an unranked list --
+-- they start from exactly what they were already seeing, and can then
+-- adjust it independently from there. Turning it off simply stops
+-- consulting the book's own copy; the book's saved order, if any, is left
+-- untouched on disk (harmless leftover), so re-enabling it later picks up
+-- right where the user left off instead of losing that work.
+function FloatingDictionary:setPerBookDictionaryOrderEnabled(enabled)
+	if not (self.ui and self.ui.doc_settings) then
+		return
+	end
+
+	if enabled then
+		local current_order = self:getDictionaryOrderSetting()
+		pcall(function()
+			self.ui.doc_settings:saveSetting(SETTING_DICTIONARY_ORDER, current_order)
+			self.ui.doc_settings:saveSetting(SETTING_DICTIONARY_ORDER_OVERRIDE, true)
+		end)
+	else
+		pcall(function()
+			self.ui.doc_settings:saveSetting(SETTING_DICTIONARY_ORDER_OVERRIDE, false)
+		end)
+	end
+
+	if self.ui.doc_settings.flush then
+		pcall(function()
+			self.ui.doc_settings:flush()
+		end)
+	end
+end
+
 function FloatingDictionary:getDictionaryOrderSetting()
 	local installed = self:getInstalledDictionaryNames()
 	local installed_set = {}
@@ -4987,7 +5112,20 @@ function FloatingDictionary:getDictionaryOrderSetting()
 		installed_set[name] = true
 	end
 
-	local saved = G_reader_settings:readSetting(SETTING_DICTIONARY_ORDER)
+	-- Per-book override, when this book has one enabled, takes priority
+	-- over the global default -- read from the book's own doc_settings
+	-- (sidecar file) instead of G_reader_settings. Any failure reading it
+	-- (corrupt sidecar, older KOReader build, ...) falls back to an empty
+	-- table, same as an unset global setting would.
+	local saved
+	if self:hasPerBookDictionaryOrder() then
+		local ok, result = pcall(function()
+			return self.ui.doc_settings:readSetting(SETTING_DICTIONARY_ORDER)
+		end)
+		saved = ok and result or nil
+	else
+		saved = G_reader_settings:readSetting(SETTING_DICTIONARY_ORDER)
+	end
 	if type(saved) ~= "table" then
 		saved = {}
 	end
@@ -5012,7 +5150,16 @@ function FloatingDictionary:getDictionaryOrderSetting()
 end
 
 function FloatingDictionary:setDictionaryOrderSetting(order)
-	G_reader_settings:saveSetting(SETTING_DICTIONARY_ORDER, order)
+	if self:hasPerBookDictionaryOrder() then
+		pcall(function()
+			self.ui.doc_settings:saveSetting(SETTING_DICTIONARY_ORDER, order)
+			if self.ui.doc_settings.flush then
+				self.ui.doc_settings:flush()
+			end
+		end)
+	else
+		G_reader_settings:saveSetting(SETTING_DICTIONARY_ORDER, order)
+	end
 end
 
 -- Swaps dict_name with its neighbor in the given direction (-1 = up/earlier,
@@ -5135,8 +5282,29 @@ function FloatingDictionary:genDictionaryOrderMenu()
 
 	local items = {}
 
+	local per_book_available = self.ui and self.ui.doc_settings and true or false
+	local per_book_enabled = self:hasPerBookDictionaryOrder()
+
+	if per_book_available then
+		table.insert(items, {
+			text = _("Use a different order for this book"),
+			checked_func = function()
+				return self:hasPerBookDictionaryOrder()
+			end,
+			keep_menu_open = true,
+			callback = function(touchmenu_instance)
+				self:setPerBookDictionaryOrderEnabled(not self:hasPerBookDictionaryOrder())
+				refresh(touchmenu_instance)
+			end,
+			help_text = _("When on, reordering dictionaries below only affects THIS book -- handy if you have dictionaries for different languages installed and want, say, a Spanish dictionary to come first in Spanish books and an English one first in English books. When off, this book uses the one global order shared by every book."),
+			separator = true,
+		})
+	end
+
 	table.insert(items, {
-		text = _("Tap a dictionary to select it, then use \"Move up\" / \"Move down\" below to set its priority. Dictionaries higher on this list appear first when you look up a word."),
+		text = per_book_enabled
+			and _("Tap a dictionary to select it, then use \"Move up\" / \"Move down\" below to set its priority for THIS BOOK. Dictionaries higher on this list appear first when you look up a word.")
+			or _("Tap a dictionary to select it, then use \"Move up\" / \"Move down\" below to set its priority. Dictionaries higher on this list appear first when you look up a word."),
 		enabled = false,
 		separator = true,
 	})
@@ -5230,30 +5398,33 @@ end
 -- app run, regardless of how many FloatingDictionary instances get created
 -- across documents.
 local vocabrepo_shared = {
-	tried = false, -- whether a require has already been attempted this run
-	repo = nil, -- the loaded VocabularyRepository module, or nil if unavailable
+	repo = nil, -- the loaded VocabularyRepository module, once found; nil until then
 	inited = false, -- whether VocabularyRepository:init() has been called yet
 }
 
--- Loads (and memoizes) the Vocabulary Builder plugin's VocabularyRepository
--- module. Returns nil, without erroring, when that plugin isn't installed --
--- require("widget/vocabularyrepository") only resolves at all when
--- vocabulary.koplugin's own directory has been added to package.path by
--- KOReader's plugin loader, which only happens when that plugin is actually
--- present. Only ever attempted once per app run (tried flag): a failed
--- require doesn't mean "try again next time", since the set of installed
--- plugins doesn't change without a restart.
+-- Loads (and memoizes, once found) the Vocabulary Builder plugin's
+-- VocabularyRepository module. require("widget/vocabularyrepository") only
+-- resolves once vocabulary.koplugin's own directory has been added to
+-- package.path by KOReader's plugin loader -- and KOReader loads plugins in
+-- some fixed order (alphabetical among enabled plugins), so if this
+-- plugin's own menu/settings happen to be queried before Vocabulary
+-- Builder has finished its own init, the very first require attempt can
+-- fail even though Vocabulary Builder is fully installed and working (this
+-- was reported as "Save destination (requires Vocabulary Builder)" staying
+-- permanently greyed out even with Vocabulary Builder installed and
+-- functional on its own). So a FAILED attempt is deliberately never
+-- cached -- every call retries the require -- while a SUCCESSFUL one is:
+-- once genuinely found, it can never need to be re-required.
 function FloatingDictionary:getVocabRepository()
-	if vocabrepo_shared.tried then
+	if vocabrepo_shared.repo then
 		return vocabrepo_shared.repo
 	end
-	vocabrepo_shared.tried = true
 
 	local ok, repo = pcall(require, "widget/vocabularyrepository")
 	if ok and repo then
 		vocabrepo_shared.repo = repo
 	else
-		logger.dbg("FloatingDictionary: Vocabulary Builder not installed, skipping integration.")
+		logger.dbg("FloatingDictionary: Vocabulary Builder not detected (yet).")
 	end
 
 	return vocabrepo_shared.repo
@@ -6306,17 +6477,20 @@ function FloatingDictionary:patchHighlightMenu()
 				end
 
 				-- Remove the items this plugin's simplified menu no longer
-				-- needs: Highlight colour, Gray highlight opacity, Highlight
-				-- line height, and Note marker. Matched by their known
+				-- needs: Highlight colour, Gray highlight opacity, and
+				-- Highlight line height. Matched by their known
 				-- text/text_func output so this keeps working even if
 				-- ReaderHighlight reorders its own sub_item_table, and
 				-- doesn't touch anything else (style radios, "Apply to all",
-				-- PDF write-in) since those are left in place untouched.
+				-- PDF write-in, Note marker) since those are left in place
+				-- untouched. Note marker used to be hidden here too, but
+				-- that removed a genuinely useful, independent option
+				-- (reported as "Missing Note Marker option"), so it's kept
+				-- visible now.
 				local HIDDEN_NATIVE_PREFIXES = {
 					_("Highlight color: "), -- KOReader menu text (US spelling)
 					_("Gray highlight opacity: "),
 					_("Highlight line height: "),
-					_("Note marker: "),
 				}
 				local filtered_items = {}
 				for _idx, item in ipairs(sub_items) do
@@ -6680,6 +6854,15 @@ function FloatingDictionary:showFloatingActionMenuForSelection(dict_self, word, 
 	-- selection) rather than stacking a second one.
 	self:closeActionMenu()
 
+	-- A brand new root lookup: forget whatever the full popup was showing
+	-- for the PREVIOUS word/selection. If the full popup is enabled it will
+	-- immediately repopulate these below (via renderCascadeFrame's
+	-- showResult); if it's disabled, review_word/review_definition (computed
+	-- just below) are the only source of truth, and must not be shadowed by
+	-- a stale value left over from an earlier lookup.
+	self.current_preview_word = nil
+	self.current_preview_definition = nil
+
 	local plugin = self
 
 	-- The word to actually save if the user taps "Save for review": the
@@ -6776,7 +6959,20 @@ function FloatingDictionary:runSmallMenuAction(action_id, dict_self, word, revie
 	elseif action_id == SMALL_MENU_ACTION_ADD_NOTE then
 		return self:addNoteForSelection(dict_self, dict_close_callback)
 	elseif action_id == SMALL_MENU_ACTION_WORD_REVIEW then
-		return self:addSelectionToWordReview(review_word or word, review_definition)
+		-- Prefer whatever the full dictionary popup (the card with the
+		-- footer buttons) is CURRENTLY showing on screen -- i.e. wherever
+		-- the user last swiped/paged to, even if that's a different
+		-- installed dictionary than the one the lookup started on (e.g.
+		-- "uncowed" isn't in the 1st dictionary but is in the 2nd, and the
+		-- user swiped over to it). Only when the full popup was never
+		-- shown at all (e.g. it's disabled, or genuinely nothing to show)
+		-- does this fall back to review_word/review_definition, the
+		-- best-ranked-dictionary guess computed once when the small menu
+		-- was first built.
+		local using_current_preview = self.current_preview_word ~= nil and self.current_preview_word ~= ""
+		local save_word = using_current_preview and self.current_preview_word or (review_word or word)
+		local save_definition = using_current_preview and self.current_preview_definition or review_definition
+		return self:addSelectionToWordReview(save_word, save_definition)
 	elseif action_id == SMALL_MENU_ACTION_WIKIPEDIA then
 		return self:lookupWikipedia(dict_self, word)
 	elseif action_id == SMALL_MENU_ACTION_TRANSLATE then
@@ -8257,7 +8453,14 @@ end
 -- logic; the patched showDict then picks up the result. pending_cascade_step
 -- tells showPreview to push this as a new cascade frame instead of treating it
 -- as a fresh root lookup that would wipe the stack.
-function FloatingDictionary:lookupSelectedWord(dict_self, text)
+-- selection_box (optional): caja aproximada { x, y, w, h } en coordenadas
+-- de pantalla, alrededor del punto donde el usuario tocó la palabra dentro
+-- del popup (ver FloatingDictionaryPopup:onHoldReleaseText). Se pasa como
+-- `box` a onLookupWord para que el nuevo lookup lleve consigo una posición
+-- real: sin esto, cada paso de la cascada/breadcrumb recibía boxes = nil y
+-- el popup siguiente caía al modo de anclaje fijo arriba/abajo de pantalla
+-- en vez de mantenerse pegado a la palabra tocada.
+function FloatingDictionary:lookupSelectedWord(dict_self, text, selection_box)
 	if not text or text == "" then
 		return true
 	end
@@ -8279,20 +8482,18 @@ function FloatingDictionary:lookupSelectedWord(dict_self, text)
 	if info_ok and info then
 		nparams = info.nparams
 	end
-	logger.warn("FloatingDictionary: lookupSelectedWord text=", text, "nparams=", nparams, "highlight=", highlight)
 
 	self.pending_cascade_step = true
 	local ok, err
 	if nparams and nparams >= 6 then
 		ok, err = pcall(function()
-			dict_self:onLookupWord(text, false, nil, highlight, nil)
+			dict_self:onLookupWord(text, false, selection_box, highlight, nil)
 		end)
 	else
 		ok, err = pcall(function()
-			dict_self:onLookupWord(text, nil, highlight, nil)
+			dict_self:onLookupWord(text, selection_box, highlight, nil)
 		end)
 	end
-	logger.warn("FloatingDictionary: onLookupWord call ok=", ok, "err=", err)
 	if not ok then
 		self.pending_cascade_step = false
 	end
@@ -8440,6 +8641,16 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 		local search_text = self:getSearchText(word, result)
 		local preview_payload = self:buildPreviewPayload(word, result, current_index, preview_count)
 
+		-- Record whatever this card is now actually displaying, so the
+		-- small "Highlight / Add Note / Save" menu's own "Save for review"
+		-- button (see runSmallMenuAction) saves THIS -- the dictionary
+		-- entry currently on screen -- instead of always the best-ranked
+		-- dictionary's entry from when the small menu was first built,
+		-- regardless of which page the user has since swiped/paged to.
+		self.current_preview_word = search_text
+		self.current_preview_definition = (not result.no_result and result.definition)
+			and htmlToPlainText(result.definition, 500) or nil
+
 		local action_specs = {}
 		local external_specs
 		for _, action in ipairs(self:getVisibleActions()) do
@@ -8519,8 +8730,8 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 			breadcrumb_callback = function(index)
 				return self:onBreadcrumbSelect(index)
 			end,
-			lookup_word_callback = function(text)
-				return self:lookupSelectedWord(dict_self, text)
+			lookup_word_callback = function(text, selection_box)
+				return self:lookupSelectedWord(dict_self, text, selection_box)
 			end,
 			actions = action_specs,
 			open_callback = function()
