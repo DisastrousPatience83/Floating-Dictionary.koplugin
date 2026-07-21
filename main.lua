@@ -8408,10 +8408,35 @@ function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, d
 		and #self.cascade_history > 0
 	self.pending_cascade_step = false
 
+	-- Follow-up lookups triggered by tapping our own hold-selected text
+	-- inside a popup arrive with a real `boxes` (built from the tap
+	-- position -- see lookupSelectedWord/onHoldReleaseText above). But a
+	-- cascade step can *also* start from tapping a native cross-reference
+	-- link embedded in the definition HTML (link ~= nil); that path is
+	-- driven entirely by KOReader core, which has no idea where on our
+	-- custom card the link sat on screen, so `boxes` arrives nil/empty for
+	-- it. Previously that fell straight through to init()'s "no usable
+	-- selection boxes" fallback, which -- combined with anchor_top being
+	-- pinned to the *root* lookup's side for the whole session (see
+	-- cascade_anchor_top below, kept fixed on purpose so the trail doesn't
+	-- flip top/bottom mid-session) -- snapped the new card flush to that
+	-- fixed screen edge instead of staying near where the previous card
+	-- actually was. Inheriting the previous frame's boxes in that case
+	-- keeps the new card anchored to the same spot the last card occupied,
+	-- so the cascade stays glued to the word instead of walking away from
+	-- it one link-tap at a time.
+	local effective_boxes = boxes
+	if is_cascade_step and (not effective_boxes or #effective_boxes == 0) then
+		local prev_frame = self.cascade_history[#self.cascade_history]
+		if prev_frame and prev_frame.boxes and #prev_frame.boxes > 0 then
+			effective_boxes = prev_frame.boxes
+		end
+	end
+
 	local frame = {
 		word = word,
 		results = results,
-		boxes = boxes,
+		boxes = effective_boxes,
 		link = link,
 		dict_close_callback = dict_close_callback,
 	}
