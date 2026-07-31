@@ -893,16 +893,6 @@ local CUSTOM_ICONS_DIR_NAME = "floatingdictionary-images"
 -- getDictionaryOrderSetting/moveDictionaryInOrder/genDictionaryOrderMenu and
 -- sortResultsByDictionaryOrder below.
 local SETTING_DICTIONARY_ORDER = "floatingdictionary_dictionary_order"
--- Per-book override: when true, THIS book's own sidecar/docsettings holds
--- its own copy of SETTING_DICTIONARY_ORDER (same key, different storage --
--- self.ui.doc_settings instead of G_reader_settings), consulted instead of
--- the global order above. Lets a Spanish book prioritize a Spanish
--- dictionary while an English book keeps prioritizing an English one,
--- without the two fighting over a single global order. Off by default, so
--- every book keeps using the one global order exactly as before until the
--- user explicitly turns this on for a specific book. See
--- hasPerBookDictionaryOrder/setPerBookDictionaryOrderEnabled below.
-local SETTING_DICTIONARY_ORDER_OVERRIDE = "floatingdictionary_dictionary_order_override"
 local SETTING_SHOW_EXTERNAL_BUTTONS = "floatingdictionary_show_external_buttons"
 -- Smart Highlight: when enabled, a 2+ word selection is silently turned into
 -- a plain KOReader highlight (no dictionary popup, no FloatingActionMenu,
@@ -1235,6 +1225,25 @@ local SMALL_MENU_ACTION_WORD_REVIEW = "sm_word_review"
 local SMALL_MENU_ACTION_WIKIPEDIA = "sm_wikipedia"
 local SMALL_MENU_ACTION_TRANSLATE = "sm_translate"
 local SMALL_MENU_ACTION_SEARCH_BOOK = "sm_search_book"
+-- Puts the current selection into KOReader's own native "select mode" --
+-- the exact same mechanism as the "Select"/"Extend" button in KOReader's
+-- built-in highlight dialog (ReaderHighlight:startSelection, see
+-- startSelectMode below) -- so the user can then hold-pan from either end
+-- to grow the selection across paragraphs/pages before finishing with a
+-- normal hold-release. Addresses the "trigger select mode" request
+-- (github issue #14): makes it easy to highlight long chunks of text
+-- without being limited to a single hold-drag gesture.
+local SMALL_MENU_ACTION_SELECT_MODE = "sm_select_mode"
+-- Re-enters select mode anchored on the most recently created highlight
+-- (tracked in FloatingDictionary.last_highlight_index, see
+-- extendLastHighlight below), so a *new* nearby selection can grow that
+-- existing highlight instead of becoming a separate one. Also addresses
+-- issue #14 ("pull from the end of a set highlight ... extend the
+-- previous highlight automatically") -- done via KOReader's own
+-- select-mode machinery (one extra tap) rather than merging highlight
+-- boxes/text by hand, which isn't something that can be verified without
+-- testing on an actual device.
+local SMALL_MENU_ACTION_EXTEND_LAST = "sm_extend_last"
 
 local SMALL_MENU_ACTIONS = {
 	-- "label" is the descriptive text shown in the settings menu (where
@@ -1252,6 +1261,8 @@ local SMALL_MENU_ACTIONS = {
 	{ id = SMALL_MENU_ACTION_WIKIPEDIA, label = _("Wikipedia"), short_label = _("Wikipedia") },
 	{ id = SMALL_MENU_ACTION_TRANSLATE, label = _("Translate"), short_label = _("Translate") },
 	{ id = SMALL_MENU_ACTION_SEARCH_BOOK, label = _("Fulltext search"), short_label = _("Search") },
+	{ id = SMALL_MENU_ACTION_SELECT_MODE, label = _("Select mode (extend selection)"), short_label = _("Select") },
+	{ id = SMALL_MENU_ACTION_EXTEND_LAST, label = _("Extend last highlight"), short_label = _("Extend") },
 }
 
 local SMALL_MENU_ACTION_BY_ID = {}
@@ -1311,13 +1322,14 @@ end
 
 -- Turns a (usually sdcv-produced) HTML definition into a short, plain-text
 -- string suitable for storing outside this plugin -- specifically, as the
--- "definition"/"full_definition" text mirrored into the Vocabulary Builder
--- plugin's own database (see mirrorWordToVocabBuilder further down), whose
--- schema stores plain strings, not markup. Same block-tag-to-newline +
--- tag-stripping + entity-decoding approach already used by
--- FloatingDictionaryPopup:estimateHtmlContentHeight, kept here as a small
--- standalone helper since this needs the resulting *text*, not just its
--- height.
+-- definition text shown in this plugin's own Word Review context. No
+-- longer used for Vocabulary Builder itself (see mirrorWordToVocabBuilder
+-- further down): that plugin now captures its own context directly via the
+-- native "WordLookedUp" event, the same as its own "Add to vocabulary
+-- builder" button does. Same block-tag-to-newline + tag-stripping +
+-- entity-decoding approach already used by FloatingDictionaryPopup:
+-- estimateHtmlContentHeight, kept here as a small standalone helper since
+-- this needs the resulting *text*, not just its height.
 local function htmlToPlainText(html, max_chars)
 	if not html or html == "" then
 		return ""
@@ -2807,25 +2819,7 @@ function FloatingDictionaryPopup:onHoldReleaseText(_arg, ges)
 	end, ges)
 
 	if selected_text and selected_text ~= "" and self.lookup_word_callback then
-		-- Construimos una caja aproximada alrededor del punto donde soltó
-		-- el dedo, del mismo tipo de tabla que las boxes reales de una
-		-- selección en el libro (x/y/w/h en coordenadas de pantalla), para
-		-- que el siguiente popup de la cascada pueda "abrazar" esa posición
-		-- en vez de caer al modo de anclaje fijo arriba/abajo de pantalla
-		-- (ver el fallback "No usable selection boxes" en
-		-- FloatingDictionaryPopup:init()).
-		local selection_box = nil
-		if ges and ges.pos then
-			local box_w = Screen:scaleBySize(60)
-			local box_h = Screen:scaleBySize(24)
-			selection_box = {
-				x = ges.pos.x - box_w / 2,
-				y = ges.pos.y - box_h / 2,
-				w = box_w,
-				h = box_h,
-			}
-		end
-		self.lookup_word_callback(selected_text, selection_box)
+		self.lookup_word_callback(selected_text)
 	end
 
 	return ok
@@ -3194,30 +3188,16 @@ function FloatingActionMenu:init()
 			-- Tier 1, anchored bottom.
 			target_y = bottom_candidate
 		else
-			-- Tier 2: stack on the dictionary's own side, but BEYOND its
-			-- card -- past its far edge, further away from the selection --
-			-- rather than between the dictionary and the selection. This is
-			-- deliberately deterministic (no "which direction do I need to
-			-- push this in" branching): the dictionary card, when it's
-			-- present, is always immediately adjacent to the selection
-			-- (gap-separated, same as top_candidate/bottom_candidate would
-			-- be), so the only spot on the dictionary's side that can never
-			-- overlap the selection itself is right past the dictionary's
-			-- own far edge. An earlier version of this tier could, when the
-			-- selection sat very close to a screen edge, end up computing a
-			-- position that landed back on top of the selected word instead
-			-- of past the dictionary card -- this fixes that.
-			local same_side_candidate
-			if dict_dimen then
-				same_side_candidate = self.anchor_top
-					and (dict_dimen.y + dict_dimen.h + gap) -- dictionary is below the selection: stack further below, past it
-					or (dict_dimen.y - gap - card_h) -- dictionary is above the selection: stack further above, past it
-			else
-				-- No dictionary card on screen to stack against (e.g. the
-				-- floating dictionary card is disabled, or hasn't painted
-				-- yet): fall back to the plain hugging position on that
-				-- same side.
-				same_side_candidate = self.anchor_top and bottom_candidate or top_candidate
+			-- Tier 2: try the dictionary's own side instead, stacked flush
+			-- against its card rather than on top of it.
+			local same_side_candidate = self.anchor_top and bottom_candidate or top_candidate
+
+			if overlapsDict(same_side_candidate) then
+				if same_side_candidate < dict_dimen.y then
+					same_side_candidate = dict_dimen.y - gap - card_h
+				else
+					same_side_candidate = dict_dimen.y + dict_dimen.h + gap
+				end
 			end
 
 			local same_side_fits = same_side_candidate >= screen_margin
@@ -3354,21 +3334,6 @@ function FloatingDictionary:init()
 	self._suspended = false
 	self.pending_word_review_task = nil
 	self.action_menu_popup = nil -- currently shown FloatingActionMenu (Highlight/Add Note card for a phrase selection), if any
-
-	-- Tracks whichever word/definition the FULL dictionary popup (the card
-	-- with the footer buttons, not the small Highlight/Add Note menu) is
-	-- CURRENTLY displaying -- i.e. whatever the user last swiped/paged to,
-	-- possibly a different installed dictionary than the one the lookup
-	-- started on. Updated every time renderCascadeFrame's showResult(index)
-	-- runs (see below). The small menu's own "Save for review" button reads
-	-- these instead of the word resolved at the moment the small menu was
-	-- first built, so it always saves whatever is actually on screen instead
-	-- of always the first-ranked dictionary's entry, no matter which page
-	-- the user paged to afterwards. Reset to nil whenever a fresh, non-
-	-- cascaded lookup starts (see showFloatingActionMenuForSelection), so a
-	-- stale word from a previous session/word is never used as a fallback.
-	self.current_preview_word = nil
-	self.current_preview_definition = nil
 
 	-- Cascade state: ordered list of frames { word, results, boxes, link,
 	-- dict_close_callback } representing the trail of lookups in the current
@@ -3769,12 +3734,7 @@ end
 function FloatingDictionary:genDictionaryMenu()
 	return {
 		{
-			text_func = function()
-				if self:hasPerBookDictionaryOrder() then
-					return _("Dictionary order (custom for this book)")
-				end
-				return _("Dictionary order")
-			end,
+			text = _("Dictionary order"),
 			sub_item_table_func = function()
 				return self:genDictionaryOrderMenu()
 			end,
@@ -4295,21 +4255,6 @@ function FloatingDictionary:genMergedHighlightStylesMenu()
 								radio = true,
 								checked_func = select_item.checked_func,
 								callback = select_item.callback,
-								-- Long-press = "set as default", exactly like KOReader's
-								-- own native style picker. This is what was missing
-								-- before: only checked_func/callback were copied over
-								-- from the native item, so selecting a style (e.g.
-								-- "Double underline") never actually persisted as the
-								-- default for new books -- there was simply no way to
-								-- trigger the native "set as default" action anymore,
-								-- since it lived on a menu row that this plugin now
-								-- nests one level deeper, behind its own submenu.
-								-- Forwarding these two fields (both optional/may be
-								-- nil for native styles that don't support this) makes
-								-- the long-press behave exactly as it did in KOReader's
-								-- original, un-merged "Highlights" menu.
-								hold_callback = select_item.hold_callback,
-								hold_callback_text = select_item.hold_callback_text,
 							},
 							{
 								text_func = function()
@@ -5057,54 +5002,6 @@ end
 -- that no longer corresponds to an installed dictionary (uninstalled since)
 -- is silently dropped -- exactly the same "stays in sync automatically"
 -- behavior already used for the footer-button order.
--- Whether THIS book currently has its own per-book dictionary order
--- override enabled (see SETTING_DICTIONARY_ORDER_OVERRIDE above). Guards
--- every access to self.ui.doc_settings so this degrades gracefully (falls
--- back to the global order) on a docless context or any older/unusual
--- KOReader build where doc_settings might be unavailable.
-function FloatingDictionary:hasPerBookDictionaryOrder()
-	if not (self.ui and self.ui.doc_settings) then
-		return false
-	end
-	local ok, result = pcall(function()
-		return self.ui.doc_settings:isTrue(SETTING_DICTIONARY_ORDER_OVERRIDE)
-	end)
-	return ok and result or false
-end
-
--- Turns the per-book override on/off for the CURRENT book. Turning it on
--- seeds the book's own order from whatever order is currently in effect
--- (the global default, or a previous per-book order if one already existed)
--- so switching this on never resets the user back to an unranked list --
--- they start from exactly what they were already seeing, and can then
--- adjust it independently from there. Turning it off simply stops
--- consulting the book's own copy; the book's saved order, if any, is left
--- untouched on disk (harmless leftover), so re-enabling it later picks up
--- right where the user left off instead of losing that work.
-function FloatingDictionary:setPerBookDictionaryOrderEnabled(enabled)
-	if not (self.ui and self.ui.doc_settings) then
-		return
-	end
-
-	if enabled then
-		local current_order = self:getDictionaryOrderSetting()
-		pcall(function()
-			self.ui.doc_settings:saveSetting(SETTING_DICTIONARY_ORDER, current_order)
-			self.ui.doc_settings:saveSetting(SETTING_DICTIONARY_ORDER_OVERRIDE, true)
-		end)
-	else
-		pcall(function()
-			self.ui.doc_settings:saveSetting(SETTING_DICTIONARY_ORDER_OVERRIDE, false)
-		end)
-	end
-
-	if self.ui.doc_settings.flush then
-		pcall(function()
-			self.ui.doc_settings:flush()
-		end)
-	end
-end
-
 function FloatingDictionary:getDictionaryOrderSetting()
 	local installed = self:getInstalledDictionaryNames()
 	local installed_set = {}
@@ -5112,20 +5009,7 @@ function FloatingDictionary:getDictionaryOrderSetting()
 		installed_set[name] = true
 	end
 
-	-- Per-book override, when this book has one enabled, takes priority
-	-- over the global default -- read from the book's own doc_settings
-	-- (sidecar file) instead of G_reader_settings. Any failure reading it
-	-- (corrupt sidecar, older KOReader build, ...) falls back to an empty
-	-- table, same as an unset global setting would.
-	local saved
-	if self:hasPerBookDictionaryOrder() then
-		local ok, result = pcall(function()
-			return self.ui.doc_settings:readSetting(SETTING_DICTIONARY_ORDER)
-		end)
-		saved = ok and result or nil
-	else
-		saved = G_reader_settings:readSetting(SETTING_DICTIONARY_ORDER)
-	end
+	local saved = G_reader_settings:readSetting(SETTING_DICTIONARY_ORDER)
 	if type(saved) ~= "table" then
 		saved = {}
 	end
@@ -5150,16 +5034,7 @@ function FloatingDictionary:getDictionaryOrderSetting()
 end
 
 function FloatingDictionary:setDictionaryOrderSetting(order)
-	if self:hasPerBookDictionaryOrder() then
-		pcall(function()
-			self.ui.doc_settings:saveSetting(SETTING_DICTIONARY_ORDER, order)
-			if self.ui.doc_settings.flush then
-				self.ui.doc_settings:flush()
-			end
-		end)
-	else
-		G_reader_settings:saveSetting(SETTING_DICTIONARY_ORDER, order)
-	end
+	G_reader_settings:saveSetting(SETTING_DICTIONARY_ORDER, order)
 end
 
 -- Swaps dict_name with its neighbor in the given direction (-1 = up/earlier,
@@ -5282,29 +5157,8 @@ function FloatingDictionary:genDictionaryOrderMenu()
 
 	local items = {}
 
-	local per_book_available = self.ui and self.ui.doc_settings and true or false
-	local per_book_enabled = self:hasPerBookDictionaryOrder()
-
-	if per_book_available then
-		table.insert(items, {
-			text = _("Use a different order for this book"),
-			checked_func = function()
-				return self:hasPerBookDictionaryOrder()
-			end,
-			keep_menu_open = true,
-			callback = function(touchmenu_instance)
-				self:setPerBookDictionaryOrderEnabled(not self:hasPerBookDictionaryOrder())
-				refresh(touchmenu_instance)
-			end,
-			help_text = _("When on, reordering dictionaries below only affects THIS book -- handy if you have dictionaries for different languages installed and want, say, a Spanish dictionary to come first in Spanish books and an English one first in English books. When off, this book uses the one global order shared by every book."),
-			separator = true,
-		})
-	end
-
 	table.insert(items, {
-		text = per_book_enabled
-			and _("Tap a dictionary to select it, then use \"Move up\" / \"Move down\" below to set its priority for THIS BOOK. Dictionaries higher on this list appear first when you look up a word.")
-			or _("Tap a dictionary to select it, then use \"Move up\" / \"Move down\" below to set its priority. Dictionaries higher on this list appear first when you look up a word."),
+		text = _("Tap a dictionary to select it, then use \"Move up\" / \"Move down\" below to set its priority. Dictionaries higher on this list appear first when you look up a word."),
 		enabled = false,
 		separator = true,
 	})
@@ -5383,59 +5237,75 @@ function FloatingDictionary:setSmallMenuEnabled(enabled)
 	G_reader_settings:saveSetting(SETTING_SMALL_MENU_ENABLED, enabled and true or false)
 end
 
--- Direct integration with the Vocabulary Builder plugin (vocabulary.koplugin
--- -- see vocabularybuilder_main.lua/vocabularyrepository.lua): rather than
--- firing an event and hoping that plugin happens to listen for it, this
--- plugin reaches directly into its VocabularyRepository module (the same
--- one Vocabulary Builder's own "Learning"/"Mastered" screens read from) and
--- writes there, so a word saved from this plugin actually shows up in
--- Vocabulary Builder's own "Learning" list -- genuinely connected, not just
--- a fire-and-forget notification.
+-- Direct integration with KOReader's built-in Vocabulary Builder plugin
+-- (plugins/vocabbuilder.koplugin -- registers itself on the reader as
+-- self.ui.vocabulary_builder, see that plugin's own main.lua:
+-- `WidgetContainer:extend{ name = "vocabulary_builder", ... }`). This
+-- plugin has shipped as part of KOReader itself since October 2022, so on
+-- any reasonably current KOReader it is NOT something the user installs
+-- separately -- it's present whenever they have it switched on in Tools ->
+-- Plugin management, exactly as described in github issue #10.
 --
--- Shared at module level (not per FloatingDictionary instance), same
--- reasoning as fastdict_shared/modern_plugin_buttons_shared elsewhere in
--- this file: the require + one-time :init() only need to happen once per
--- app run, regardless of how many FloatingDictionary instances get created
--- across documents.
-local vocabrepo_shared = {
-	repo = nil, -- the loaded VocabularyRepository module, once found; nil until then
-	inited = false, -- whether VocabularyRepository:init() has been called yet
-}
-
--- Loads (and memoizes, once found) the Vocabulary Builder plugin's
--- VocabularyRepository module. require("widget/vocabularyrepository") only
--- resolves once vocabulary.koplugin's own directory has been added to
--- package.path by KOReader's plugin loader -- and KOReader loads plugins in
--- some fixed order (alphabetical among enabled plugins), so if this
--- plugin's own menu/settings happen to be queried before Vocabulary
--- Builder has finished its own init, the very first require attempt can
--- fail even though Vocabulary Builder is fully installed and working (this
--- was reported as "Save destination (requires Vocabulary Builder)" staying
--- permanently greyed out even with Vocabulary Builder installed and
--- functional on its own). So a FAILED attempt is deliberately never
--- cached -- every call retries the require -- while a SUCCESSFUL one is:
--- once genuinely found, it can never need to be re-required.
-function FloatingDictionary:getVocabRepository()
-	if vocabrepo_shared.repo then
-		return vocabrepo_shared.repo
-	end
-
-	local ok, repo = pcall(require, "widget/vocabularyrepository")
-	if ok and repo then
-		vocabrepo_shared.repo = repo
-	else
-		logger.dbg("FloatingDictionary: Vocabulary Builder not detected (yet).")
-	end
-
-	return vocabrepo_shared.repo
+-- BUG FIX (issue #10): this integration previously tried to reach a
+-- *different*, third-party plugin instead -- require("widget/
+-- vocabularyrepository"), which is the module path used by
+-- nbngoc93/vocabulary.koplugin, not the one bundled with KOReader. For
+-- anyone using the built-in plugin (almost everyone, since it's on by
+-- default) that require silently never resolved, so "Save destination:
+-- Vocabulary Builder" stayed permanently greyed out no matter what was
+-- actually installed. A one-time failed require was also being cached
+-- forever (vocabrepo_shared.tried), so even fixing detection later would
+-- still have needed KOReader restarted at exactly the right moment to
+-- pick it up.
+--
+-- The correct, supported integration point -- confirmed straight from that
+-- plugin's own source (vocab_main.lua) -- is the same one KOReader's own
+-- dictionary popup uses for its native "Add to vocabulary builder" button:
+-- fire a "WordLookedUp" event and let VocabBuilder:onWordLookedUp do the
+-- (correct, schema-aware) save itself. That also means this plugin no
+-- longer needs to know anything about Vocabulary Builder's database schema
+-- (word/book_title/prev_context/next_context/highlight) -- it just asks,
+-- the same way the stock button does.
+function FloatingDictionary:hasVocabBuilder()
+	return (self.ui and self.ui.vocabulary_builder) ~= nil
 end
 
--- Whether the Vocabulary Builder plugin is installed/enabled. Used
--- internally by addSelectionToWordReview to decide whether a "Save for
--- review" save should also be mirrored into that plugin; no longer used to
--- hide/show any button, since Word Review itself always works regardless.
-function FloatingDictionary:hasVocabBuilder()
-	return self:getVocabRepository() ~= nil
+-- Best-effort mirror of one saved word into Vocabulary Builder, so it shows
+-- up in that plugin's "Learning" screen exactly as if the user had tapped
+-- its own "Add to vocabulary builder" button. Always non-fatal: any
+-- failure here (plugin off, event handler error, ...) is swallowed and
+-- logged, never surfaces as an error to the user, and never blocks the
+-- Word Review save this is called alongside.
+--
+-- is_manual is passed as true (the third "WordLookedUp" argument) so the
+-- word saves regardless of Vocabulary Builder's own "auto-add every
+-- lookup" setting -- see that plugin's onWordLookedUp: without is_manual,
+-- it silently no-ops whenever its auto-add setting is off, which would
+-- make this plugin's own explicit "Save for review" button appear to do
+-- nothing.
+--
+-- Deliberately does not pass a definition/context of its own: Vocabulary
+-- Builder captures prev/next context straight from the live selection on
+-- self.ui.highlight when it handles the event, the same as it would for
+-- its own button -- addSelectionToWordReview (the only caller) is careful
+-- not to have cleared that selection yet, so this arrives while it's still
+-- live.
+function FloatingDictionary:mirrorWordToVocabBuilder(word)
+	if not self:hasVocabBuilder() then
+		return false
+	end
+
+	local book_title = (self.ui.doc_props and self.ui.doc_props.display_title) or _("Dictionary lookup")
+
+	local ok, err = pcall(function()
+		self.ui:handleEvent(Event:new("WordLookedUp", word, book_title, true)) -- is_manual: true
+	end)
+	if not ok then
+		logger.warn("FloatingDictionary: mirroring word to vocabulary builder failed:", err)
+		return false
+	end
+
+	return true
 end
 
 -- Where a "Save for review" action stores the word: this plugin's own Word
@@ -5478,62 +5348,6 @@ function FloatingDictionary:setSaveDestination(destination)
 		destination = SAVE_DESTINATION_BOTH
 	end
 	G_reader_settings:saveSetting(SETTING_SAVE_DESTINATION, destination)
-end
-
--- Placeholder definition text used by mirrorWordToVocabBuilder below when a
--- word has no real definition/context to store (a saved phrase with no
--- dictionary match and no capturable surrounding context, for instance).
--- Vocabulary Builder's own schema requires a non-empty definition for an
--- entry to save at all, so *something* has to go there; this is short,
--- plain, and honest about there being nothing else to show, rather than
--- repeating the word itself as if it were its own definition.
-local VOCAB_BUILDER_NO_DEFINITION_TEXT = _("Not found.")
-
--- Best-effort mirror of one saved word into Vocabulary Builder's own
--- "learning" table (VocabularyRepository:saveLearning), so it shows up in
--- that plugin's "Learning" screen exactly as if the user had added it there
--- directly. Always non-fatal: any failure here (missing plugin, DB error,
--- ...) is swallowed and logged, never surfaces as an error to the user, and
--- never blocks the Word Review save this is called alongside.
---
--- definition_text, when given, is a short plain-text definition/context
--- (already HTML-stripped -- see htmlToPlainText) to store alongside the
--- word. When there isn't one, VOCAB_BUILDER_NO_DEFINITION_TEXT is stored
--- instead so the entry still saves (see the module-level constant above).
-function FloatingDictionary:mirrorWordToVocabBuilder(word, definition_text)
-	local repo = self:getVocabRepository()
-	if not repo then
-		return false
-	end
-
-	if not vocabrepo_shared.inited then
-		local ok_init = pcall(function()
-			repo:init()
-		end)
-		vocabrepo_shared.inited = ok_init
-		if not ok_init then
-			return false
-		end
-	end
-
-	local definition = trim(definition_text or "")
-	if definition == "" then
-		definition = VOCAB_BUILDER_NO_DEFINITION_TEXT
-	end
-
-	local ok, err = pcall(function()
-		repo:saveLearning({
-			word = word,
-			definition = definition,
-			full_definition = definition,
-		})
-	end)
-	if not ok then
-		logger.warn("FloatingDictionary: mirroring word to vocabulary builder failed:", err)
-		return false
-	end
-
-	return true
 end
 
 -- Ordered list of actions that should currently render as footer buttons.
@@ -6477,20 +6291,17 @@ function FloatingDictionary:patchHighlightMenu()
 				end
 
 				-- Remove the items this plugin's simplified menu no longer
-				-- needs: Highlight colour, Gray highlight opacity, and
-				-- Highlight line height. Matched by their known
+				-- needs: Highlight colour, Gray highlight opacity, Highlight
+				-- line height, and Note marker. Matched by their known
 				-- text/text_func output so this keeps working even if
 				-- ReaderHighlight reorders its own sub_item_table, and
 				-- doesn't touch anything else (style radios, "Apply to all",
-				-- PDF write-in, Note marker) since those are left in place
-				-- untouched. Note marker used to be hidden here too, but
-				-- that removed a genuinely useful, independent option
-				-- (reported as "Missing Note Marker option"), so it's kept
-				-- visible now.
+				-- PDF write-in) since those are left in place untouched.
 				local HIDDEN_NATIVE_PREFIXES = {
 					_("Highlight color: "), -- KOReader menu text (US spelling)
 					_("Gray highlight opacity: "),
 					_("Highlight line height: "),
+					_("Note marker: "),
 				}
 				local filtered_items = {}
 				for _idx, item in ipairs(sub_items) do
@@ -6809,7 +6620,14 @@ function FloatingDictionary:createSmartHighlight(hl_self)
 	-- KOReader's own hold-release cleanup.
 	UIManager:scheduleIn(0.05, function()
 		local ok, err = pcall(function()
-			hl_self:saveHighlight(true)
+			local index = hl_self:saveHighlight(true)
+			-- Remembered the same way highlightSelection/startSelectMode
+			-- do, so "Extend last highlight" (see extendLastHighlight)
+			-- also picks up highlights created silently through Smart
+			-- Highlight, not just ones made from the small menu.
+			if type(index) == "number" then
+				self.last_highlight_index = index
+			end
 
 			-- Clears the transient selection overlay only -- the saved
 			-- highlight annotation itself is independent of it and stays
@@ -6853,15 +6671,6 @@ function FloatingDictionary:showFloatingActionMenuForSelection(dict_self, word, 
 	-- Replace any action menu already on screen (e.g. from a previous
 	-- selection) rather than stacking a second one.
 	self:closeActionMenu()
-
-	-- A brand new root lookup: forget whatever the full popup was showing
-	-- for the PREVIOUS word/selection. If the full popup is enabled it will
-	-- immediately repopulate these below (via renderCascadeFrame's
-	-- showResult); if it's disabled, review_word/review_definition (computed
-	-- just below) are the only source of truth, and must not be shadowed by
-	-- a stale value left over from an earlier lookup.
-	self.current_preview_word = nil
-	self.current_preview_definition = nil
 
 	local plugin = self
 
@@ -6959,20 +6768,7 @@ function FloatingDictionary:runSmallMenuAction(action_id, dict_self, word, revie
 	elseif action_id == SMALL_MENU_ACTION_ADD_NOTE then
 		return self:addNoteForSelection(dict_self, dict_close_callback)
 	elseif action_id == SMALL_MENU_ACTION_WORD_REVIEW then
-		-- Prefer whatever the full dictionary popup (the card with the
-		-- footer buttons) is CURRENTLY showing on screen -- i.e. wherever
-		-- the user last swiped/paged to, even if that's a different
-		-- installed dictionary than the one the lookup started on (e.g.
-		-- "uncowed" isn't in the 1st dictionary but is in the 2nd, and the
-		-- user swiped over to it). Only when the full popup was never
-		-- shown at all (e.g. it's disabled, or genuinely nothing to show)
-		-- does this fall back to review_word/review_definition, the
-		-- best-ranked-dictionary guess computed once when the small menu
-		-- was first built.
-		local using_current_preview = self.current_preview_word ~= nil and self.current_preview_word ~= ""
-		local save_word = using_current_preview and self.current_preview_word or (review_word or word)
-		local save_definition = using_current_preview and self.current_preview_definition or review_definition
-		return self:addSelectionToWordReview(save_word, save_definition)
+		return self:addSelectionToWordReview(review_word or word, review_definition)
 	elseif action_id == SMALL_MENU_ACTION_WIKIPEDIA then
 		return self:lookupWikipedia(dict_self, word)
 	elseif action_id == SMALL_MENU_ACTION_TRANSLATE then
@@ -6989,6 +6785,10 @@ function FloatingDictionary:runSmallMenuAction(action_id, dict_self, word, revie
 			pcall(dict_close_callback)
 		end
 		return self:showSearchDialog(word)
+	elseif action_id == SMALL_MENU_ACTION_SELECT_MODE then
+		return self:startSelectMode(dict_self, dict_close_callback)
+	elseif action_id == SMALL_MENU_ACTION_EXTEND_LAST then
+		return self:extendLastHighlight(dict_self, dict_close_callback)
 	end
 
 	return true
@@ -7122,13 +6922,12 @@ end
 -- for review" button); which store(s) it actually reaches depends solely on
 -- that setting.
 --
--- definition_hint, when given, is a short plain-text definition (already
--- HTML-stripped by the caller, e.g. via htmlToPlainText) to store alongside
--- the word in Vocabulary Builder -- callers that have an actual dictionary
--- match on hand pass it through; callers that don't (e.g. a phrase with no
--- headword) simply omit it, and the captured selection context is used
--- instead. If neither is available, mirrorWordToVocabBuilder stores a short
--- "Not found." placeholder rather than inventing a real definition.
+-- definition_hint is no longer forwarded to Vocabulary Builder itself --
+-- see mirrorWordToVocabBuilder above: the native "WordLookedUp" event
+-- handler captures its own prev/next context straight from the live
+-- selection, exactly as it does for its own "Add to vocabulary builder"
+-- button. definition_hint is still used for nothing else here and is kept
+-- only so existing callers (small menu / footer) don't need to change.
 --
 -- Deliberately does not clear the selection/highlight or invoke
 -- dict_close_callback: saving a word is a lightweight, non-destructive tag
@@ -7170,7 +6969,7 @@ function FloatingDictionary:addSelectionToWordReview(word, definition_hint)
 	-- successful Word Review save into an error for the user.
 	local saved_to_vocab_builder = false
 	if want_vocab_builder then
-		saved_to_vocab_builder = self:mirrorWordToVocabBuilder(word, definition_hint or context)
+		saved_to_vocab_builder = self:mirrorWordToVocabBuilder(word)
 	end
 
 	if not saved_to_word_review and not saved_to_vocab_builder then
@@ -7538,6 +7337,16 @@ function FloatingDictionary:highlightSelection(dict_self, dict_close_callback)
 		local ok, err = pcall(function()
 			if type(highlight.showHighlightPrompt) == "function" then
 				highlight:showHighlightPrompt(function(...)
+					-- Best-effort: if the prompt's own completion callback
+					-- happens to hand back the new annotation index (its
+					-- exact signature isn't guaranteed across KOReader
+					-- versions), remember it the same way the saveHighlight
+					-- branch below does, so "Extend last highlight" can
+					-- still find it. Harmless no-op when it doesn't.
+					local maybe_index = ...
+					if type(maybe_index) == "number" then
+						self.last_highlight_index = maybe_index
+					end
 					self.selection_snapshot = nil
 					if dict_close_callback then
 						pcall(dict_close_callback, ...)
@@ -7545,6 +7354,7 @@ function FloatingDictionary:highlightSelection(dict_self, dict_close_callback)
 				end)
 			elseif type(highlight.saveHighlight) == "function" then
 				local index = highlight:saveHighlight(true)
+				self.last_highlight_index = index
 				if type(highlight.clear) == "function" then
 					highlight:clear()
 				end
@@ -7557,6 +7367,115 @@ function FloatingDictionary:highlightSelection(dict_self, dict_close_callback)
 
 		if not ok then
 			logger.warn("FloatingDictionary: highlight action failed:", err)
+		end
+	end)
+
+	return true
+end
+
+-- Puts the current selection into KOReader's native select mode instead of
+-- saving a highlight outright -- the same underlying call KOReader's own
+-- built-in highlight dialog uses for its "Select" button (see the
+-- ["01_select"] entry in ReaderHighlight:init, apps/reader/modules/
+-- readerhighlight.lua). Once in select mode the user can hold-pan from
+-- either end of the temporary highlight to grow it across paragraphs or
+-- pages, then finish with a normal hold-release -- addresses the "trigger
+-- select mode" part of github issue #14.
+function FloatingDictionary:startSelectMode(dict_self, dict_close_callback)
+	local highlight = self:restoreSelection(dict_self)
+
+	if not highlight then
+		return self:notify(_("No selection to extend."))
+	end
+
+	if not highlight.selected_text
+		and highlight.hold_pos
+		and type(highlight.highlightFromHoldPos) == "function" then
+		pcall(function()
+			highlight:highlightFromHoldPos()
+		end)
+	end
+
+	if not (highlight.selected_text and highlight.selected_text.pos0 and highlight.selected_text.pos1) then
+		return self:notify(_("No selection to extend."))
+	end
+
+	if type(highlight.startSelection) ~= "function" then
+		logger.warn("FloatingDictionary: Select mode unavailable (startSelection missing).")
+		return self:notify(_("Select mode isn't available on this KOReader version."))
+	end
+
+	UIManager:scheduleIn(0.05, function()
+		local ok, err = pcall(function()
+			-- No index passed: starts a brand-new temporary highlight and
+			-- enters select mode on it (mirrors the native "Select" button,
+			-- as opposed to "Extend" which passes an existing index -- see
+			-- extendLastHighlight below).
+			local index = highlight:startSelection()
+			if type(index) == "number" then
+				self.last_highlight_index = index
+			end
+			self.selection_snapshot = nil
+			if dict_close_callback then
+				pcall(dict_close_callback)
+			end
+		end)
+
+		if not ok then
+			logger.warn("FloatingDictionary: Select mode failed:", err)
+		end
+	end)
+
+	return true
+end
+
+-- Re-enters select mode on the most recently created highlight (tracked in
+-- self.last_highlight_index, set by highlightSelection/createSmartHighlight/
+-- startSelectMode above whenever a highlight is actually saved), using the
+-- exact same native call as KOReader's own "Extend" button (the same
+-- ReaderHighlight:startSelection(index) as startSelectMode above, just with
+-- an existing annotation index instead of none). This lets a selection that
+-- starts right after a previous highlight grow that highlight instead of
+-- becoming a separate one, without this plugin re-implementing KOReader's
+-- own highlight-box/text merging -- addresses the "extend the previous
+-- highlight automatically" part of github issue #14.
+function FloatingDictionary:extendLastHighlight(dict_self, dict_close_callback)
+	local highlight = self:getActiveHighlight(dict_self)
+	if not highlight then
+		return self:notify(_("Select mode isn't available right now."))
+	end
+
+	local index = self.last_highlight_index
+	local annotations = highlight.ui and highlight.ui.annotation and highlight.ui.annotation.annotations
+	if not index or not annotations or not annotations[index] then
+		return self:notify(_("No recent highlight to extend."))
+	end
+
+	if type(highlight.startSelection) ~= "function" then
+		logger.warn("FloatingDictionary: Extend highlight unavailable (startSelection missing).")
+		return self:notify(_("Select mode isn't available on this KOReader version."))
+	end
+
+	-- The phrase the user just selected to open this menu isn't what's
+	-- being extended -- clear it first so select mode starts cleanly from
+	-- the saved highlight's own endpoint.
+	self.selection_snapshot = nil
+	if type(highlight.clear) == "function" then
+		pcall(function()
+			highlight:clear()
+		end)
+	end
+
+	UIManager:scheduleIn(0.05, function()
+		local ok, err = pcall(function()
+			highlight:startSelection(index)
+			if dict_close_callback then
+				pcall(dict_close_callback)
+			end
+		end)
+
+		if not ok then
+			logger.warn("FloatingDictionary: Extend highlight failed:", err)
 		end
 	end)
 
@@ -8408,35 +8327,10 @@ function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, d
 		and #self.cascade_history > 0
 	self.pending_cascade_step = false
 
-	-- Follow-up lookups triggered by tapping our own hold-selected text
-	-- inside a popup arrive with a real `boxes` (built from the tap
-	-- position -- see lookupSelectedWord/onHoldReleaseText above). But a
-	-- cascade step can *also* start from tapping a native cross-reference
-	-- link embedded in the definition HTML (link ~= nil); that path is
-	-- driven entirely by KOReader core, which has no idea where on our
-	-- custom card the link sat on screen, so `boxes` arrives nil/empty for
-	-- it. Previously that fell straight through to init()'s "no usable
-	-- selection boxes" fallback, which -- combined with anchor_top being
-	-- pinned to the *root* lookup's side for the whole session (see
-	-- cascade_anchor_top below, kept fixed on purpose so the trail doesn't
-	-- flip top/bottom mid-session) -- snapped the new card flush to that
-	-- fixed screen edge instead of staying near where the previous card
-	-- actually was. Inheriting the previous frame's boxes in that case
-	-- keeps the new card anchored to the same spot the last card occupied,
-	-- so the cascade stays glued to the word instead of walking away from
-	-- it one link-tap at a time.
-	local effective_boxes = boxes
-	if is_cascade_step and (not effective_boxes or #effective_boxes == 0) then
-		local prev_frame = self.cascade_history[#self.cascade_history]
-		if prev_frame and prev_frame.boxes and #prev_frame.boxes > 0 then
-			effective_boxes = prev_frame.boxes
-		end
-	end
-
 	local frame = {
 		word = word,
 		results = results,
-		boxes = effective_boxes,
+		boxes = boxes,
 		link = link,
 		dict_close_callback = dict_close_callback,
 	}
@@ -8478,14 +8372,7 @@ end
 -- logic; the patched showDict then picks up the result. pending_cascade_step
 -- tells showPreview to push this as a new cascade frame instead of treating it
 -- as a fresh root lookup that would wipe the stack.
--- selection_box (optional): caja aproximada { x, y, w, h } en coordenadas
--- de pantalla, alrededor del punto donde el usuario tocó la palabra dentro
--- del popup (ver FloatingDictionaryPopup:onHoldReleaseText). Se pasa como
--- `box` a onLookupWord para que el nuevo lookup lleve consigo una posición
--- real: sin esto, cada paso de la cascada/breadcrumb recibía boxes = nil y
--- el popup siguiente caía al modo de anclaje fijo arriba/abajo de pantalla
--- en vez de mantenerse pegado a la palabra tocada.
-function FloatingDictionary:lookupSelectedWord(dict_self, text, selection_box)
+function FloatingDictionary:lookupSelectedWord(dict_self, text)
 	if not text or text == "" then
 		return true
 	end
@@ -8507,18 +8394,20 @@ function FloatingDictionary:lookupSelectedWord(dict_self, text, selection_box)
 	if info_ok and info then
 		nparams = info.nparams
 	end
+	logger.warn("FloatingDictionary: lookupSelectedWord text=", text, "nparams=", nparams, "highlight=", highlight)
 
 	self.pending_cascade_step = true
 	local ok, err
 	if nparams and nparams >= 6 then
 		ok, err = pcall(function()
-			dict_self:onLookupWord(text, false, selection_box, highlight, nil)
+			dict_self:onLookupWord(text, false, nil, highlight, nil)
 		end)
 	else
 		ok, err = pcall(function()
-			dict_self:onLookupWord(text, selection_box, highlight, nil)
+			dict_self:onLookupWord(text, nil, highlight, nil)
 		end)
 	end
+	logger.warn("FloatingDictionary: onLookupWord call ok=", ok, "err=", err)
 	if not ok then
 		self.pending_cascade_step = false
 	end
@@ -8666,16 +8555,6 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 		local search_text = self:getSearchText(word, result)
 		local preview_payload = self:buildPreviewPayload(word, result, current_index, preview_count)
 
-		-- Record whatever this card is now actually displaying, so the
-		-- small "Highlight / Add Note / Save" menu's own "Save for review"
-		-- button (see runSmallMenuAction) saves THIS -- the dictionary
-		-- entry currently on screen -- instead of always the best-ranked
-		-- dictionary's entry from when the small menu was first built,
-		-- regardless of which page the user has since swiped/paged to.
-		self.current_preview_word = search_text
-		self.current_preview_definition = (not result.no_result and result.definition)
-			and htmlToPlainText(result.definition, 500) or nil
-
 		local action_specs = {}
 		local external_specs
 		for _, action in ipairs(self:getVisibleActions()) do
@@ -8755,8 +8634,8 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 			breadcrumb_callback = function(index)
 				return self:onBreadcrumbSelect(index)
 			end,
-			lookup_word_callback = function(text, selection_box)
-				return self:lookupSelectedWord(dict_self, text, selection_box)
+			lookup_word_callback = function(text)
+				return self:lookupSelectedWord(dict_self, text)
 			end,
 			actions = action_specs,
 			open_callback = function()
