@@ -1,284 +1,284 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: koreader-floatingdictionary\n"
-"Language-Team: Spanish\n"
-"Language: es\n"
+"Language-Team: Portuguese (Brazil)\n"
+"Language: pt-BR\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
 msgid "%1 (thickness: %2)"
-msgstr "%1 (%2)"
+msgstr "%1 (espessura: %2)"
 
 msgid "%1 - %2"
 msgstr "%1 - %2"
 
 msgid "%1 thickness"
-msgstr "Grosor de %1"
+msgstr "Espessura de %1"
 
 msgid "%1 word(s) selected"
-msgstr "%1 palabra(s) seleccionada(s)"
+msgstr "%1 palavra(s) selecionada(s)"
 
 msgid "%1/%2"
 msgstr "%1/%2"
 
 msgid "(no context saved for this word)"
-msgstr "(no hay contexto guardado para esta palabra)"
+msgstr "(sem contexto salvo para esta palavra)"
 
 msgid "+Vocab"
 msgstr "+Vocab"
 
 msgid "Add Note"
-msgstr "Añadir nota"
+msgstr "Adicionar nota"
 
 msgid "Add to vocabulary builder"
-msgstr "Añadir a vocabulario"
+msgstr "Adicionar ao vocabulário"
 
 msgid "Added \"%1\" to Word Review."
-msgstr "Se añadió \"%1\" a Repaso de palabras."
+msgstr "Adicionada \"%1\" à Revisão de Palavras."
 
 msgid "Added to vocabulary builder."
-msgstr "Añadida a vocabulario."
+msgstr "Adicionada ao vocabulário."
 
 msgid "All (%1)"
-msgstr "Todos (%1)"
+msgstr "Todas (%1)"
 
 msgid "Appearance"
-msgstr "Apariencia"
+msgstr "Aparência"
 
 msgid "Apply current style and color to all highlights"
-msgstr "Aplicar a todos los subrayados"
+msgstr "Aplicar estilo e cor atuais a todos os destaques"
 
 msgid "Available buttons"
-msgstr "Botones disponibles"
+msgstr "Botões disponíveis"
 
 msgid "Back"
-msgstr "Atrás"
+msgstr "Voltar"
 
 msgid "Border darkness for every dictionary popup, from 0 (white/invisible) to 1 (solid black)."
-msgstr "Intensidad del borde, de 0 (invisible) a 1 (negro)."
+msgstr "Intensidade da borda de cada popup do dicionário, de 0 (branco/invisível) a 1 (preto sólido)."
 
 msgid "Border thickness, in pixels, for every dictionary popup (%1-%2)."
-msgstr "Grosor del borde en píxeles (%1-%2)."
+msgstr "Espessura da borda, em pixels, de cada popup do dicionário (%1-%2)."
 
 msgid "Both"
 msgstr "Ambos"
 
 msgid "Build index caches now"
-msgstr "Generar índices ahora"
+msgstr "Gerar índices agora"
 
 msgid "Button icon: %1 (currently: %2)"
-msgstr "Icono: %1 (actual: %2)"
+msgstr "Ícone do botão: %1 (atual: %2)"
 
 msgid "Button text: %1"
-msgstr "Texto: %1"
+msgstr "Texto do botão: %1"
 
 msgid "Button text: %1 (currently \"%2\")"
-msgstr "Texto: %1 (actual: \"%2\")"
+msgstr "Texto do botão: %1 (atual: \"%2\")"
 
 msgid "Buttons"
-msgstr "Botones"
+msgstr "Botões"
 
 msgid "Buttons from other plugins"
-msgstr "Otros complementos"
+msgstr "Botões de outros plugins"
 
 msgid "Buttons shown in preview"
-msgstr "Botones en la vista previa"
+msgstr "Botões mostrados na pré-visualização"
 
 msgid "Cancel"
 msgstr "Cancelar"
 
 msgid "Card height"
-msgstr "Altura de la tarjeta"
+msgstr "Altura do cartão"
 
 msgid "Card height: %1 % of screen"
-msgstr "Altura: %1 % de pantalla"
+msgstr "Altura do cartão: %1 % da tela"
 
 msgid "Check for updates"
-msgstr "Buscar actualizaciones"
+msgstr "Verificar atualizações"
 
 msgid "Checking for updates…"
-msgstr "Buscando actualizaciones…"
+msgstr "Verificando atualizações…"
 
 msgid "Choose up to 3 buttons for the small selection menu (shown when you select text), and set their order."
-msgstr "Elige hasta 3 botones para el menú pequeño de selección (aparece al seleccionar texto) y define su orden."
+msgstr "Escolha até 3 botões para o menu pequeno de seleção (aparece ao selecionar texto) e defina a ordem deles."
 
 msgid "Classic"
-msgstr "Clásico"
+msgstr "Clássico"
 
 msgid "Context"
 msgstr "Contexto"
 
 msgid "Context menu"
-msgstr "Menú contextual"
+msgstr "Menu de contexto"
 
 msgid "Could not add word to vocabulary builder."
-msgstr "No se pudo añadir la palabra."
+msgstr "Não foi possível adicionar a palavra ao vocabulário."
 
 msgid "Could not check for updates."
-msgstr "No se pudo buscar actualizaciones."
+msgstr "Não foi possível verificar atualizações."
 
 msgid "Could not check for updates: %1"
-msgstr "No se pudo buscar actualizaciones: %1"
+msgstr "Não foi possível verificar atualizações: %1"
 
 msgid "Could not save word for review."
-msgstr "No se pudo guardar la palabra para repaso."
+msgstr "Não foi possível salvar a palavra para revisão."
 
 msgid "Could not translate this word."
-msgstr "No se pudo traducir."
+msgstr "Não foi possível traduzir esta palavra."
 
 msgid "Crosshatch"
-msgstr "Trama cruzada"
+msgstr "Grade cruzada"
 
 msgid "Dash underline"
-msgstr "Subrayado discontinuo"
+msgstr "Sublinhado tracejado"
 
 msgid "Delete"
-msgstr "Eliminar"
+msgstr "Excluir"
 
 msgid "Delete %1 selected word(s)?"
-msgstr "¿Eliminar %1 palabra(s) seleccionada(s)?"
+msgstr "Excluir %1 palavra(s) selecionada(s)?"
 
 msgid "Delete ALL saved words, from every book?\nThis cannot be undone."
-msgstr "¿Eliminar TODAS las palabras guardadas, de todos los libros?\nEsta acción no se puede deshacer."
+msgstr "Excluir TODAS as palavras salvas, de todos os livros?\nEsta ação não pode ser desfeita."
 
 msgid "Delete \"%1\" from your saved words?"
-msgstr "¿Eliminar \"%1\" de tus palabras guardadas?"
+msgstr "Excluir \"%1\" das suas palavras salvas?"
 
 msgid "Delete all saved words"
-msgstr "Eliminar todas las palabras guardadas"
+msgstr "Excluir todas as palavras salvas"
 
 msgid "Delete selected"
-msgstr "Eliminar seleccionadas"
+msgstr "Excluir selecionadas"
 
 msgid "Deselect all"
-msgstr "Deseleccionar todo"
+msgstr "Desmarcar tudo"
 
 msgid "Diagonal thick"
-msgstr "Diagonal gruesa"
+msgstr "Diagonal grossa"
 
 msgid "Diagonal thin"
 msgstr "Diagonal fina"
 
 msgid "Dictionary"
-msgstr "Diccionario"
+msgstr "Dicionário"
 
 msgid "Dictionary lookup"
-msgstr "Consulta"
+msgstr "Consulta no dicionário"
 
 msgid "Dictionary order"
-msgstr "Orden de diccionarios"
+msgstr "Ordem dos dicionários"
 
 msgid "Display mode"
-msgstr "Modo de vista"
+msgstr "Modo de exibição"
 
 msgid "Display mode: %1"
-msgstr "Modo de vista: %1"
+msgstr "Modo de exibição: %1"
 
 msgid "Dotted"
-msgstr "Punteado"
+msgstr "Pontilhado"
 
 msgid "Dotted underline"
-msgstr "Subrayado punteado"
+msgstr "Sublinhado pontilhado"
 
 msgid "Download"
-msgstr "Descargar"
+msgstr "Baixar"
 
 msgid "Download and install now?"
-msgstr "¿Descargar e instalar ahora?"
+msgstr "Baixar e instalar agora?"
 
 msgid "Downloading Floating Dictionary %1…"
-msgstr "Descargando Diccionario Flotante %1…"
+msgstr "Baixando o Dicionário Flutuante %1…"
 
 msgid "Enable Floating Dictionary"
-msgstr "Activar Diccionario Flotante"
+msgstr "Ativar o Dicionário Flutuante"
 
 msgid "Enable card transition animations"
-msgstr "Animaciones de tarjeta"
+msgstr "Ativar animações de transição do cartão"
 
 msgid "Enable instant lookups"
-msgstr "Búsquedas instantáneas"
+msgstr "Ativar consultas instantâneas"
 
 msgid "Exit Flashcards"
-msgstr "Salir de tarjetas"
+msgstr "Sair dos cartões"
 
 msgid "Exit select mode"
-msgstr "Salir del modo selección"
+msgstr "Sair do modo de seleção"
 
 msgid "Fast lookups (FastDict): off"
-msgstr "Búsqueda rápida: desactivada"
+msgstr "Consulta rápida (FastDict): desligada"
 
 msgid "Fast lookups (FastDict): on"
-msgstr "Búsqueda rápida: activada"
+msgstr "Consulta rápida (FastDict): ligada"
 
 msgid "FastDict: building dictionary index caches…"
-msgstr "Generando índices…"
+msgstr "FastDict: gerando índices dos dicionários…"
 
 msgid "FastDict: cache build failed: %1"
-msgstr "Error al generar caché: %1"
+msgstr "FastDict: falha ao gerar cache: %1"
 
 msgid "FastDict: caches ready (%1 s)."
-msgstr "Caché lista (%1 s)."
+msgstr "FastDict: caches prontos (%1 s)."
 
 msgid "Fine underline"
-msgstr "Subrayado fino"
+msgstr "Sublinhado fino"
 
 msgid "Flashcards"
-msgstr "Tarjetas"
+msgstr "Cartões"
 
 msgid "Floating Dictionary"
-msgstr "Diccionario Flotante"
+msgstr "Dicionário Flutuante"
 
 msgid "Floating Dictionary %1 is available (you have %2)."
-msgstr "Hay disponible Diccionario Flotante %1 (tienes %2)."
+msgstr "O Dicionário Flutuante %1 está disponível (você tem %2)."
 
 msgid "Floating Dictionary %1 – Release notes"
-msgstr "Diccionario Flotante %1 – Notas de la versión"
+msgstr "Dicionário Flutuante %1 – Notas da versão"
 
 msgid "Floating Dictionary is up to date (%1)."
-msgstr "Diccionario Flotante está actualizado (%1)."
+msgstr "O Dicionário Flutuante está atualizado (%1)."
 
 msgid "Floating Dictionary settings"
-msgstr "Ajustes"
+msgstr "Configurações do Dicionário Flutuante"
 
 msgid "Floating Dictionary updated to %1.\nRestart KOReader to finish."
-msgstr "Diccionario Flotante se actualizó a %1.\nReinicia KOReader para terminar."
+msgstr "O Dicionário Flutuante foi atualizado para %1.\nReinicie o KOReader para concluir."
 
 msgid "Font"
-msgstr "Tipografía"
+msgstr "Fonte"
 
 msgid "Font size for the word/definition text in every dictionary popup."
-msgstr "Tamaño de letra en la ventana emergente."
+msgstr "Tamanho da fonte do texto (palavra/definição) em cada popup do dicionário."
 
 msgid "Full"
 msgstr "Completo"
 
 msgid "Fulltext search"
-msgstr "Buscar en el texto"
+msgstr "Pesquisa no texto completo"
 
 msgid "Gray highlight opacity: "
-msgstr "Opacidad del gris: "
+msgstr "Opacidade do destaque cinza: "
 
 msgid "Grid thick"
-msgstr "Cuadrícula gruesa"
+msgstr "Grade grossa"
 
 msgid "Grid thin"
-msgstr "Cuadrícula fina"
+msgstr "Grade fina"
 
 msgid "Hide: %1"
 msgstr "Ocultar: %1"
 
 msgid "Highlight"
-msgstr "Resaltar"
+msgstr "Destacar"
 
 msgid "Highlight color: "
-msgstr "Color: "
+msgstr "Cor do destaque: "
 
 msgid "Highlight line height: "
-msgstr "Altura de línea: "
+msgstr "Altura de linha do destaque: "
 
 msgid "Highlight styles"
-msgstr "Estilos de subrayado"
+msgstr "Estilos de destaque"
 
 msgid "Kobo"
 msgstr "Kobo"
@@ -287,19 +287,19 @@ msgid "Language"
 msgstr "Idioma"
 
 msgid "Language learner"
-msgstr "Aprender idiomas"
+msgstr "Aprendiz de idiomas"
 
 msgid "Language: %1"
 msgstr "Idioma: %1"
 
 msgid "Later"
-msgstr "Más tarde"
+msgstr "Mais tarde"
 
 msgid "Line thickness in pixels (%1-%2)."
-msgstr "Grosor en píxeles (%1-%2)."
+msgstr "Espessura da linha em pixels (%1-%2)."
 
 msgid "Manage saved words"
-msgstr "Gestionar palabras guardadas"
+msgstr "Gerenciar palavras salvas"
 
 msgid "Mark as Mastered"
 msgstr "Marcar como dominada"
@@ -308,301 +308,301 @@ msgid "Mastered (%1)"
 msgstr "Dominadas (%1)"
 
 msgid "Maximum of %1 buttons. Remove one first."
-msgstr "Máximo de %1 botones. Elimina uno primero."
+msgstr "Máximo de %1 botões. Remova um primeiro."
 
 msgid "Minimal"
 msgstr "Mínimo"
 
 msgid "Move down"
-msgstr "Mover abajo"
+msgstr "Mover para baixo"
 
 msgid "Move down: %1"
-msgstr "Bajar: %1"
+msgstr "Descer: %1"
 
 msgid "Move to Review"
-msgstr "Mover a repaso"
+msgstr "Mover para Revisão"
 
 msgid "Move up"
-msgstr "Mover arriba"
+msgstr "Mover para cima"
 
 msgid "Move up: %1"
 msgstr "Subir: %1"
 
 msgid "Next"
-msgstr "Siguiente"
+msgstr "Próximo"
 
 msgid "Next result"
-msgstr "Siguiente resultado"
+msgstr "Próximo resultado"
 
 msgid "No .svg files found in %1"
-msgstr "Sin archivos .svg en %1"
+msgstr "Nenhum arquivo .svg encontrado em %1"
 
 msgid "No buttons available."
-msgstr "Sin botones disponibles."
+msgstr "Nenhum botão disponível."
 
 msgid "No definition found for \"%1\"."
-msgstr "No se encontró definición para \"%1\"."
+msgstr "Nenhuma definição encontrada para \"%1\"."
 
 msgid "No definition found."
-msgstr "Sin definición."
+msgstr "Nenhuma definição encontrada."
 
 msgid "No definition."
-msgstr "Sin definición."
+msgstr "Sem definição."
 
 msgid "No dictionaries found. Install or enable a dictionary first."
-msgstr "Instale o active un diccionario."
+msgstr "Nenhum dicionário encontrado. Instale ou ative um dicionário primeiro."
 
 msgid "No installable package found in this release."
-msgstr "No se encontró un paquete instalable en esta versión."
+msgstr "Nenhum pacote instalável foi encontrado nesta versão."
 
 msgid "No selection to annotate."
-msgstr "No hay selección para anotar."
+msgstr "Nada selecionado para anotar."
 
 msgid "No selection to highlight."
-msgstr "Nada seleccionado."
+msgstr "Nada selecionado para destacar."
 
 msgid "No selection to look up."
-msgstr "Nada seleccionado."
+msgstr "Nada selecionado para consultar."
 
 msgid "No text to translate."
-msgstr "Sin texto para traducir."
+msgstr "Sem texto para traduzir."
 
 msgid "No word to add."
-msgstr "Sin palabra que añadir."
+msgstr "Nenhuma palavra para adicionar."
 
 msgid "No words in this view"
-msgstr "No hay palabras en esta vista"
+msgstr "Sem palavras nesta visualização"
 
 msgid "No words saved yet"
-msgstr "Aún no hay palabras guardadas"
+msgstr "Ainda não há palavras salvas"
 
 msgid "No words selected"
-msgstr "No hay palabras seleccionadas"
+msgstr "Nenhuma palavra selecionada"
 
 msgid "No words to review."
-msgstr "No hay palabras para repasar."
+msgstr "Não há palavras para revisar."
 
 msgid "None (use text)"
-msgstr "Ninguno (usar texto)"
+msgstr "Nenhum (usar texto)"
 
 msgid "Note"
 msgstr "Nota"
 
 msgid "Note marker: "
-msgstr "Marcador: "
+msgstr "Marcador de nota: "
 
 msgid "Nothing to save."
-msgstr "Nada que guardar."
+msgstr "Nada para salvar."
 
 msgid "Only random words"
-msgstr "Solo palabras aleatorias"
+msgstr "Apenas palavras aleatórias"
 
 msgid "Only saved words"
-msgstr "Solo palabras guardadas"
+msgstr "Apenas palavras salvas"
 
 msgid "Open in browser"
-msgstr "Abrir en el navegador"
+msgstr "Abrir no navegador"
 
 msgid "Outline thick"
-msgstr "Contorno grueso"
+msgstr "Contorno grosso"
 
 msgid "Percentage of the screen height used by the dictionary card (%1-%2)."
-msgstr "Porcentaje de pantalla (%1-%2)."
+msgstr "Porcentagem da altura da tela usada pelo cartão do dicionário (%1-%2)."
 
 msgid "Personal"
-msgstr "Personal"
+msgstr "Pessoal"
 
 msgid "Plain underline"
-msgstr "Subrayado simple"
+msgstr "Sublinhado simples"
 
 msgid "Please enter a valid number."
-msgstr "Introduzca un número válido."
+msgstr "Digite um número válido."
 
 msgid "Plugin folder not found."
-msgstr "Carpeta no encontrada."
+msgstr "Pasta do plugin não encontrada."
 
 msgid "Popup border darkness"
-msgstr "Intensidad del borde"
+msgstr "Intensidade da borda do popup"
 
 msgid "Popup border darkness: %1 %"
-msgstr "Intensidad del borde: %1 %"
+msgstr "Intensidade da borda do popup: %1 %"
 
 msgid "Popup border thickness"
-msgstr "Grosor del borde"
+msgstr "Espessura da borda do popup"
 
 msgid "Popup border thickness: %1"
-msgstr "Grosor del borde: %1"
+msgstr "Espessura da borda do popup: %1"
 
 msgid "Popup font size"
-msgstr "Tamaño de letra"
+msgstr "Tamanho da fonte do popup"
 
 msgid "Popup font size: %1"
-msgstr "Tamaño de letra: %1"
+msgstr "Tamanho da fonte do popup: %1"
 
 msgid "Popup style"
-msgstr "Estilo"
+msgstr "Estilo do popup"
 
 msgid "Popup style: %1"
-msgstr "Estilo: %1"
+msgstr "Estilo do popup: %1"
 
 msgid "Prev"
 msgstr "Ant."
 
 msgid "Preview font"
-msgstr "Tipografía"
+msgstr "Fonte da pré-visualização"
 
 msgid "Preview font: %1"
-msgstr "Tipografía: %1"
+msgstr "Fonte: %1"
 
 msgid "Previous result"
 msgstr "Resultado anterior"
 
 msgid "Random"
-msgstr "Aleatorio"
+msgstr "Aleatório"
 
 msgid "Rebuild index caches"
 msgstr "Regenerar índices"
 
 msgid "Remove from small menu"
-msgstr "Quitar del menú pequeño"
+msgstr "Remover do menu pequeno"
 
 msgid "Reset to default"
-msgstr "Restablecer"
+msgstr "Restaurar padrão"
 
 msgid "Restart now"
-msgstr "Reiniciar ahora"
+msgstr "Reiniciar agora"
 
 msgid "Save"
-msgstr "Guardar"
+msgstr "Salvar"
 
 msgid "Save for review"
-msgstr "Guardar para repaso"
+msgstr "Salvar para revisão"
 
 msgid "Search"
-msgstr "Buscar"
+msgstr "Pesquisar"
 
 msgid "See Definition"
-msgstr "Ver definición"
+msgstr "Ver definição"
 
 msgid "Select all"
-msgstr "Seleccionar todo"
+msgstr "Selecionar tudo"
 
 msgid "Select multiple"
-msgstr "Seleccionar varias"
+msgstr "Selecionar várias"
 
 msgid "Set"
 msgstr "Aplicar"
 
 msgid "Show buttons from other dictionary plugins"
-msgstr "Botones de otros diccionarios"
+msgstr "Mostrar botões de outros plugins de dicionário"
 
 msgid "Show review word when opening a book"
-msgstr "Mostrar palabra al abrir un libro"
+msgstr "Mostrar palavra de revisão ao abrir um livro"
 
 msgid "Show review word when waking from sleep"
-msgstr "Mostrar palabra al reactivar pantalla"
+msgstr "Mostrar palavra de revisão ao reativar a tela"
 
 msgid "Show: %1"
 msgstr "Mostrar: %1"
 
 msgid "Small menu buttons"
-msgstr "Botones del menú pequeño"
+msgstr "Botões do menu pequeno"
 
 msgid "Solid light"
 msgstr "Sólido claro"
 
 msgid "Solid medium"
-msgstr "Sólido medio"
+msgstr "Sólido médio"
 
 msgid "Status: %1 dictionaries via FastDict, %2 via sdcv"
-msgstr "%1 por FastDict, %2 por sdcv"
+msgstr "Status: %1 dicionários via FastDict, %2 via sdcv"
 
 msgid "Status: error — using sdcv (see log)"
-msgstr "Error — usando sdcv"
+msgstr "Status: erro — usando sdcv (veja o log)"
 
 msgid "Status: idle (loads on first lookup)"
-msgstr "Inactivo (carga al usarse)"
+msgstr "Status: inativo (carrega na primeira consulta)"
 
 msgid "Tap a button to select it, then use \"Move up\" / \"Move down\" to set its position. Use the checkbox row to show/hide it."
-msgstr "Toque un botón y use \"Subir\" / \"Bajar\" para moverlo. Use la casilla para mostrarlo u ocultarlo."
+msgstr "Toque em um botão para selecioná-lo e use \"Subir\" / \"Descer\" para definir sua posição. Use a caixa de seleção para mostrar/ocultar."
 
 msgid "Tap a dictionary to select it, then use \"Move up\" / \"Move down\" below to set its priority. Dictionaries higher on this list appear first when you look up a word."
-msgstr "Toque un diccionario y use \"Subir\" / \"Bajar\" para ordenarlo. Los primeros de la lista aparecen antes."
+msgstr "Toque em um dicionário para selecioná-lo e use \"Subir\" / \"Descer\" abaixo para definir sua prioridade. Os dicionários mais acima nesta lista aparecem primeiro ao consultar uma palavra."
 
 msgid "Text shown on this button in the popup. Leave blank to use the default single-letter icon."
-msgstr "Déjelo en blanco para usar una letra por defecto."
+msgstr "Texto mostrado neste botão no popup. Deixe em branco para usar o ícone de letra única padrão."
 
 msgid "Thick underline"
-msgstr "Subrayado grueso"
+msgstr "Sublinhado grosso"
 
 msgid "This Book (%1)"
-msgstr "Este libro (%1)"
+msgstr "Este livro (%1)"
 
 msgid "Translate"
-msgstr "Traducir"
+msgstr "Traduzir"
 
 msgid "Unknown book"
-msgstr "Libro desconocido"
+msgstr "Livro desconhecido"
 
 msgid "Update cancelled."
-msgstr "Actualización cancelada."
+msgstr "Atualização cancelada."
 
 msgid "Update check cancelled."
-msgstr "Búsqueda de actualizaciones cancelada."
+msgstr "Verificação de atualizações cancelada."
 
 msgid "Update download failed: %1"
-msgstr "Error al descargar la actualización: %1"
+msgstr "Falha ao baixar a atualização: %1"
 
 msgid "Update install failed: %1"
-msgstr "Error al instalar la actualización: %1"
+msgstr "Falha ao instalar a atualização: %1"
 
 msgid "Use book font (default)"
-msgstr "Usar tipografía del libro"
+msgstr "Usar fonte do livro (padrão)"
 
 msgid "View full release notes"
-msgstr "Ver notas completas"
+msgstr "Ver notas completas da versão"
 
 msgid "Vocabulary builder is not available."
-msgstr "Vocabulario no disponible."
+msgstr "Vocabulário não disponível."
 
 msgid "Wavy fill"
-msgstr "Relleno ondulado"
+msgstr "Preenchimento ondulado"
 
 msgid "Wavy underline"
-msgstr "Subrayado ondulado"
+msgstr "Sublinhado ondulado"
 
 msgid "What's new:"
-msgstr "Novedades:"
+msgstr "Novidades:"
 
 msgid "Wiki"
 msgstr "Wiki"
 
 msgid "Wikipedia"
-msgstr "Wikipedia"
+msgstr "Wikipédia"
 
 msgid "Word Review"
-msgstr "Repaso de palabras"
+msgstr "Revisão de Palavras"
 
 msgid "Word Review (%1)"
-msgstr "Repaso de palabras (%1)"
+msgstr "Revisão de Palavras (%1)"
 
 msgid "Word source: %1"
-msgstr "Origen de la palabra: %1"
+msgstr "Origem da palavra: %1"
 
 msgid "Word to review"
-msgstr "Palabra a repasar"
+msgstr "Palavra a revisar"
 
 msgid "Words mastered: %1"
-msgstr "Palabras dominadas: %1"
+msgstr "Palavras dominadas: %1"
 
 msgid "hidden"
 msgstr "oculto"
 
 msgid "none, using text"
-msgstr "ninguno"
+msgstr "nenhum, usar texto"
 
 msgid "seen %1×"
 msgstr "visto %1×"
 
 msgid "shown"
-msgstr "visible"
+msgstr "visível"

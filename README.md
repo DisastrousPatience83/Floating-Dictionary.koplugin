@@ -180,6 +180,7 @@ Available buttons (choose up to 3, with your own order):
 When **enabled**: selecting 2 or more words instantly highlights them — no popup, no menu of any kind — using your current highlight settings, exactly as if you'd used KOReader's native highlighting directly.
 
 - Single-word selections (including hyphenated ones like *well-known*) are **never** affected — they still open the dictionary normally.
+- **Very long press:** if you keep your finger resting on the final selection for the long-hold time (KOReader's long-press interval), Smart Highlight steps aside and KOReader's native highlight menu (Select, Search, Add note, other plugins' actions…) opens instead — the same way a very long press works on a single word.
 - When **disabled** *(default)*, multi-word selections follow KOReader's own native "long-press on text" setting instead, exactly as if this plugin weren't installed.
 
 📍 **Location:** `Floating Dictionary → Context menu → Smart Highlight`

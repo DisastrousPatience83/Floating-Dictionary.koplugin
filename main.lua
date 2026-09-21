@@ -30,6 +30,9 @@ local logger = require("logger")
 local Notification = require("ui/widget/notification")
 local L10n = require("l10n")
 local _ = L10n.gettext
+-- OTA updater: checks GitHub Releases for a newer version and installs it.
+-- See addToMainMenu below ("Check for updates").
+local Updater = require("updater")
 
 -- FastDict: in-process StarDict engine used to answer instant dictionary
 -- lookups (see the "FastDict" section near the end of this file). Pure
@@ -3503,12 +3506,24 @@ function FloatingDictionary:addToMainMenu(menu_items)
 		-- whatever language was active the first time the menu was built,
 		-- even after switching languages from the settings menu.
 		menu_items.floatingdictionary = {
-			text_func = function() return _("Word Review") end,
+			text_func = function() return _("Floating Dictionary") end,
 			sorting_hint = "setting",
-			keep_menu_open = true,
-			callback = function()
-				WordReview:showManageWordsScreen(self)
-			end,
+			sub_item_table = {
+				{
+					text_func = function() return _("Word Review") end,
+					keep_menu_open = true,
+					callback = function()
+						WordReview:showManageWordsScreen(self)
+					end,
+				},
+				{
+					text_func = function() return _("Check for updates") end,
+					keep_menu_open = true,
+					callback = function()
+						Updater.checkForUpdates(false)
+					end,
+				},
+			},
 		}
 		return
 	end
@@ -3532,7 +3547,14 @@ function FloatingDictionary:addToMainMenu(menu_items)
 				callback = function()
 					self:setPreviewEnabled(not self:isPreviewEnabled())
 				end,
+			},
+			{
+				text_func = function() return _("Check for updates") end,
+				keep_menu_open = true,
 				separator = true,
+				callback = function()
+					Updater.checkForUpdates(false)
+				end,
 			},
 			{
 				text_func = function() return _("Appearance") end,
@@ -6525,6 +6547,34 @@ end
 -- root phrase selection -- also falls straight through to
 -- original_onHoldRelease unchanged, so none of that existing behavior is
 -- affected by this patch.
+-- Monotonic clock in seconds, used to time how long the final hold of a
+-- text selection lasted (see patchHoldRelease / issue #16).
+local ok_time_mod, time_mod = pcall(require, "ui/time")
+local function getMonotonicSeconds()
+	if ok_time_mod and time_mod and time_mod.now and time_mod.to_s then
+		return time_mod.to_s(time_mod.now())
+	end
+	local ok_socket, socket = pcall(require, "socket")
+	if ok_socket and socket and socket.gettime then
+		return socket.gettime()
+	end
+	return os.time()
+end
+
+-- Same threshold KOReader itself uses for a "long final hold"
+-- (Settings -> Taps and gestures -> Long-press interval / highlight_long_hold_threshold_s).
+local function getLongHoldThresholdSeconds()
+	local saved = G_reader_settings and G_reader_settings:readSetting("highlight_long_hold_threshold_s")
+	if type(saved) == "number" then
+		return saved
+	end
+	local ok_gd, GestureDetector = pcall(require, "device/gesturedetector")
+	if ok_gd and GestureDetector and type(GestureDetector.LONG_HOLD_INTERVAL_S) == "number" then
+		return GestureDetector.LONG_HOLD_INTERVAL_S
+	end
+	return 3
+end
+
 function FloatingDictionary:patchHoldRelease()
 	local highlight = self.ui and self.ui.highlight
 
@@ -6552,13 +6602,55 @@ function FloatingDictionary:patchHoldRelease()
 	-- the plugin itself is enabled (the crash happens before either check).
 	local plugin = self
 
+	-- Very-long-press detection (github issue #16) -------------------------
+	-- KOReader decides "long final hold" (-> native Highlight menu with
+	-- Select / Search / other plugins' buttons) from ReaderHighlight's own
+	-- long_hold_reached flag, which it only arms when it thinks the long
+	-- hold would change the outcome (e.g. never when the default long-press
+	-- action is already "ask"). Smart Highlight bypasses that whole flow
+	-- for 2+ word selections, so it must do its own timing: it records when
+	-- the hold timer was last (re)armed -- KOReader re-arms it on the initial
+	-- hold and on every selection change while dragging, so the elapsed time
+	-- is how long the finger has rested on the final selection -- and
+	-- compares that against the same threshold KOReader uses.
+	if not highlight._floatingdictionary_holdtimer_patched then
+		local original_resetHoldTimer = highlight._resetHoldTimer
+		if type(original_resetHoldTimer) == "function" then
+			highlight._resetHoldTimer = function(hl_self, clear, ...)
+				if clear then
+					plugin.hold_timer_started_at = nil
+				else
+					plugin.hold_timer_started_at = getMonotonicSeconds()
+				end
+				return original_resetHoldTimer(hl_self, clear, ...)
+			end
+			highlight._floatingdictionary_holdtimer_patched = true
+		end
+	end
+
 	highlight.onHoldRelease = function(hl_self, ...)
 		-- Re-read both gates on every call (not cached) so toggling either
 		-- one from the menu takes effect immediately, without a restart.
 		plugin.enabled = plugin:isPreviewEnabled()
 
+		-- Very long final hold: the user is asking for KOReader's native
+		-- highlight menu instead of the default action, so Smart Highlight
+		-- steps aside and the original onHoldRelease shows that menu (same as
+		-- it already does for single words). Must be read BEFORE anything
+		-- below (or the original) clears the hold timer.
+		local long_final_hold = hl_self.long_hold_reached == true
+		if not long_final_hold and plugin.hold_timer_started_at then
+			long_final_hold = (getMonotonicSeconds() - plugin.hold_timer_started_at) >= getLongHoldThresholdSeconds()
+		end
+		if long_final_hold and not hl_self.long_hold_reached then
+			-- Keep KOReader's own flag in sync with our timing, so the
+			-- original onHoldRelease takes its "long final hold" branch too.
+			hl_self.long_hold_reached = true
+		end
+
 		if plugin.enabled
 			and self:isSmartHighlightEnabled()
+			and not long_final_hold
 			and not hl_self.clear_id
 			and not hl_self.select_mode
 			and hl_self.selected_text

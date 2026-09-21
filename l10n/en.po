@@ -52,6 +52,9 @@ msgstr "Apply current style and color to all highlights"
 msgid "Available buttons"
 msgstr "Available buttons"
 
+msgid "Back"
+msgstr "Back"
+
 msgid "Border darkness for every dictionary popup, from 0 (white/invisible) to 1 (solid black)."
 msgstr "Border darkness for every dictionary popup, from 0 (white/invisible) to 1 (solid black)."
 
@@ -91,6 +94,12 @@ msgstr "Card height"
 msgid "Card height: %1 % of screen"
 msgstr "Card height: %1 % of screen"
 
+msgid "Check for updates"
+msgstr "Check for updates"
+
+msgid "Checking for updates…"
+msgstr "Checking for updates…"
+
 msgid "Choose up to 3 buttons for the small selection menu (shown when you select text), and set their order."
 msgstr "Choose up to 3 buttons for the small selection menu (shown when you select text), and set their order."
 
@@ -105,6 +114,12 @@ msgstr "Context menu"
 
 msgid "Could not add word to vocabulary builder."
 msgstr "Could not add word to vocabulary builder."
+
+msgid "Could not check for updates."
+msgstr "Could not check for updates."
+
+msgid "Could not check for updates: %1"
+msgstr "Could not check for updates: %1"
 
 msgid "Could not save word for review."
 msgstr "Could not save word for review."
@@ -166,6 +181,15 @@ msgstr "Dotted"
 msgid "Dotted underline"
 msgstr "Dotted underline"
 
+msgid "Download"
+msgstr "Download"
+
+msgid "Download and install now?"
+msgstr "Download and install now?"
+
+msgid "Downloading Floating Dictionary %1…"
+msgstr "Downloading Floating Dictionary %1…"
+
 msgid "Enable Floating Dictionary"
 msgstr "Enable Floating Dictionary"
 
@@ -205,8 +229,20 @@ msgstr "Flashcards"
 msgid "Floating Dictionary"
 msgstr "Floating Dictionary"
 
+msgid "Floating Dictionary %1 is available (you have %2)."
+msgstr "Floating Dictionary %1 is available (you have %2)."
+
+msgid "Floating Dictionary %1 – Release notes"
+msgstr "Floating Dictionary %1 – Release notes"
+
+msgid "Floating Dictionary is up to date (%1)."
+msgstr "Floating Dictionary is up to date (%1)."
+
 msgid "Floating Dictionary settings"
 msgstr "Floating Dictionary settings"
+
+msgid "Floating Dictionary updated to %1.\nRestart KOReader to finish."
+msgstr "Floating Dictionary updated to %1.\nRestart KOReader to finish."
 
 msgid "Font"
 msgstr "Font"
@@ -255,6 +291,9 @@ msgstr "Language learner"
 
 msgid "Language: %1"
 msgstr "Language: %1"
+
+msgid "Later"
+msgstr "Later"
 
 msgid "Line thickness in pixels (%1-%2)."
 msgstr "Line thickness in pixels (%1-%2)."
@@ -313,6 +352,9 @@ msgstr "No definition."
 msgid "No dictionaries found. Install or enable a dictionary first."
 msgstr "No dictionaries found. Install or enable a dictionary first."
 
+msgid "No installable package found in this release."
+msgstr "No installable package found in this release."
+
 msgid "No selection to annotate."
 msgstr "No selection to annotate."
 
@@ -357,6 +399,9 @@ msgstr "Only random words"
 
 msgid "Only saved words"
 msgstr "Only saved words"
+
+msgid "Open in browser"
+msgstr "Open in browser"
 
 msgid "Outline thick"
 msgstr "Outline thick"
@@ -423,6 +468,9 @@ msgstr "Remove from small menu"
 
 msgid "Reset to default"
 msgstr "Reset to default"
+
+msgid "Restart now"
+msgstr "Restart now"
 
 msgid "Save"
 msgstr "Save"
@@ -496,8 +544,23 @@ msgstr "Translate"
 msgid "Unknown book"
 msgstr "Unknown book"
 
+msgid "Update cancelled."
+msgstr "Update cancelled."
+
+msgid "Update check cancelled."
+msgstr "Update check cancelled."
+
+msgid "Update download failed: %1"
+msgstr "Update download failed: %1"
+
+msgid "Update install failed: %1"
+msgstr "Update install failed: %1"
+
 msgid "Use book font (default)"
 msgstr "Use book font (default)"
+
+msgid "View full release notes"
+msgstr "View full release notes"
 
 msgid "Vocabulary builder is not available."
 msgstr "Vocabulary builder is not available."
@@ -507,6 +570,9 @@ msgstr "Wavy fill"
 
 msgid "Wavy underline"
 msgstr "Wavy underline"
+
+msgid "What's new:"
+msgstr "What's new:"
 
 msgid "Wiki"
 msgstr "Wiki"
