@@ -1,469 +1,559 @@
-# 📖 Floating Dictionary — KOReader Plugin
+# Floating Dictionary
 
-**Floating Dictionary** is a plugin for [KOReader](https://github.com/koreader/koreader) that replaces the stock dictionary popup with a **compact, fully customizable floating card**: configurable action buttons, an in-process fast lookup engine (FastDict), a per-book "Word Review" spaced-repetition companion, smart highlighting, page-turn-style animations, and deep visual customization.
+**Floating Dictionary** is a KOReader plugin that replaces the standard dictionary window with a compact floating card.
 
-* **Internal name:** `floatingdictionary`
-* **Package folder:** `floatingdictionary.koplugin`
-* **Platform:** KOReader only (Kindle, Kobo, PocketBook, Android, Linux/desktop builds of KOReader — anywhere KOReader itself runs)
+Select a word and a floating card appears with its definition, dictionary source, navigation controls, and configurable action buttons such as **Wikipedia**, **Translate**, **Highlight**, and **Save for review**.
 
----
+The plugin also includes a configurable selection menu, per-book word review, dictionary result navigation, cascade lookups, and **FastDict**, an in-process StarDict lookup engine.
 
-## 📑 Table of Contents
+**Current version: 6.2.0**
 
-1. [Overview](#-overview)
-2. [Requirements](#-requirements)
-3. [Installation](#-installation)
-4. [Feature Summary](#-feature-summary)
-5. [The Floating Card](#-the-floating-card)
-6. [Display Modes](#️-display-modes)
-7. [Popup Styles](#-popup-styles)
-8. [Footer Action Buttons](#-footer-action-buttons)
-9. [Small Selection Menu](#-small-selection-menu)
-10. [Smart Highlight](#️-smart-highlight)
-11. [Dictionary Order](#-dictionary-order)
-12. [Buttons From Other Plugins](#-buttons-from-other-plugins)
-13. [FastDict — Instant Lookups](#-fastdict--instant-lookups)
-14. [Word Review](#-word-review)
-15. [Card Transition Animation](#-card-transition-animation)
-16. [Appearance & Customization](#️-appearance--customization)
-17. [Full Settings Reference](#-full-settings-reference)
-18. [Menu Map](#️-menu-map)
-19. [How to Enable / Disable Each Feature](#-how-to-enable--disable-each-feature)
-20. [Known Limitations](#️-known-limitations)
-21. [Troubleshooting](#-troubleshooting)
-22. [FAQ](#-faq)
-23. [Plugin Files](#️-plugin-files)
-24. [Contributing](#-contributing)
-25. [License](#-license)
+[Screenshots go here]
 
 ---
 
-## 🔎 Overview
+## Table of Contents
 
-By default, KOReader shows a plain, non-configurable popup whenever you look up a word. **Floating Dictionary** intercepts that lookup and renders its own card instead, giving you:
-
-- A smaller, faster, more readable popup.
-- A configurable row of action buttons (highlight, search, Wikipedia, translate, save for review, navigate between results, third-party plugin buttons).
-- An independent "small menu" that appears right next to any text selection.
-- An internal dictionary engine (**FastDict**) that can answer lookups without spawning the external `sdcv` process.
-- A **Word Review** companion that resurfaces words from a book's own lookup history (or a random dictionary entry) every time you open that book or wake the device.
-- Full control over fonts, sizes, borders, icons, button labels, popup position, and visual style.
-
-Every feature below can be toggled independently — nothing here is all-or-nothing.
-
----
-
-## ✅ Requirements
-
-- A working installation of **KOReader** (any recent version that supports the modern `ReaderDictionary:addToDictButtons` API is recommended for full third-party button integration).
-- At least one installed **StarDict-format dictionary** for definitions/translations to have something to look up (KOReader's own dictionary manager can download these).
-- Optional: other dictionary-related plugins (e.g. X-Ray) if you want their buttons surfaced inside the Floating Dictionary card.
+1. [Features](#features)
+2. [Requirements](#requirements)
+3. [Installation](#installation)
+4. [First Steps](#first-steps)
+5. [Settings Reference](#settings-reference)
+6. [Popup Styles](#popup-styles)
+7. [Footer Buttons and Other Plugins](#footer-buttons-and-other-plugins)
+8. [Small Selection Menu](#small-selection-menu)
+9. [Word Review](#word-review)
+10. [Fast Lookups (FastDict)](#fast-lookups-fastdict)
+11. [Updating](#updating)
+12. [Troubleshooting](#troubleshooting)
+13. [What's New in 6.2.0](#whats-new-in-620)
+14. [License and Credits](#license-and-credits)
 
 ---
 
-## 💾 Installation
+## Features
 
-1. Download or clone this repository.
-2. Copy the plugin folder — it must contain `main.lua`, `wordreview.lua`, `_meta.lua`, and `engine.lua` (the FastDict/StarDict engine) — into your KOReader plugins directory:
-
-   ```
-   koreader/plugins/floatingdictionary.koplugin/
-   ├── _meta.lua
-   ├── main.lua
-   ├── wordreview.lua
-   ├── engine.lua
-   └── floatingdictionary-images/   <-- optional, for custom SVG icons
-   ```
-3. Restart KOReader.
-4. Open the menu: **☰ → Floating Dictionary**. If the entry doesn't appear, confirm the folder is named exactly `floatingdictionary.koplugin` and that `_meta.lua` is present and unmodified.
-
----
-
-## 🧩 Feature Summary
-
-| Feature | Description |
-|---|---|
-| 🃏 Floating card | Compact popup shown on word/selection lookup, replacing the native one. |
-| 🎛️ Display modes | Preset profiles (`Personal`, `Minimal`, `Full`, `Language learner`) that instantly change what's shown. |
-| 🎨 Popup styles | Two visual presentations: `Classic` and `Kobo`. |
-| 🔘 Configurable buttons | Highlight, search in book, Wikipedia, save for review, translate, prev/next result, third-party plugin buttons. |
-| 📋 Small menu | Independent mini-menu next to any selection, up to 3 user-chosen buttons. |
-| ✍️ Smart Highlight | 2+ word selections become an instant highlight instead of opening the dictionary. |
-| 📚 Dictionary order | User-defined priority order for installed dictionaries. |
-| 🔌 Third-party buttons | Surfaces buttons registered by other dictionary plugins inside the same card. |
-| ⚡ FastDict | In-process StarDict engine that answers exact lookups without launching `sdcv`. |
-| 🧠 Word Review | Per-book "remembered word" companion with saved-word management and flashcards. |
-| 🎬 Animations | Page-turn-style wipe animation when the card opens/closes. |
-| 🖌️ Deep customization | Font size/family, card height, border thickness/darkness, popup position, per-button custom icon/label. |
+- **Floating dictionary card** instead of the standard full-screen dictionary window.
+- **Three popup styles:** Classic, Kobo, and Kindle.
+- **Cascade lookups:** tap a word inside a definition to open a new dictionary card. A breadcrumb trail lets you navigate back through the lookup chain.
+- **Multiple dictionary results:** browse several results for the same word with a result counter such as `1/3` and previous/next arrows.
+- **Dictionary order:** choose which installed dictionary is searched first.
+- **Configurable footer buttons:** Highlight, Wikipedia, Translate, Fulltext search, and Save for review.
+  - Show or hide buttons.
+  - Reorder buttons.
+  - Rename button labels.
+  - Assign custom icons.
+- **Other plugin buttons:** integrate buttons provided by other dictionary plugins, such as X-Ray or AI assistant plugins.
+- **Small selection menu:** display up to five configurable actions when selecting text.
+- **Smart Highlight:** optionally turn any selection of two or more words into an instant highlight without opening the dictionary popup.
+- **Word Review:** save words while reading and review them later on a per-book basis.
+- **Vocabulary Builder integration:** optionally send saved words to KOReader's Vocabulary Builder plugin.
+- **FastDict:** an in-process StarDict engine for faster exact-word lookups.
+- **Appearance controls:** customize interface language, font, font size, card height, border appearance, popup position, highlight styles, and transition animations.
+- **Built-in updater:** check GitHub Releases for new versions directly from KOReader.
 
 ---
 
-## 🃏 The Floating Card
+## Requirements
 
-When you select or long-press a word in a book, instead of KOReader's default dialog you get a **floating card**:
-
-- Anchors either close to the selected word or to the top/bottom screen edge (your choice), automatically picking top vs. bottom based on where the selection sits on screen.
-- Shows the definition text plus a row of action buttons along the bottom.
-- Tapping a cross-reference link inside a definition opens another card **stacked on top** of the previous one (cascade behavior), with a breadcrumb trail so you can navigate back through the chain of lookups. This cascading behavior is not user-configurable — it always works this way.
-- Can be disabled entirely, restoring KOReader's native dictionary popup.
+- A device running **KOReader**, including Kobo, Kindle, Android, Linux, and other supported platforms.
+- At least one **StarDict dictionary** installed in KOReader.
+- An internet connection for **Wikipedia** and **Translate**.
+- **Vocabulary Builder** is optional and only required if you want saved words mirrored there.
 
 ---
 
-## 🎛️ Display Modes
+## Installation
 
-A single, exclusive (radio-style) choice that layers a complete preset on top of (or in place of) your individual settings. Switching modes takes effect immediately, since every render path re-reads it live.
+1. Download the latest release from the repository's **Releases** page.
+2. Unzip the downloaded archive.
+3. You should get a folder whose name ends in `.koplugin`.
+4. Copy the `.koplugin` folder into the `plugins` directory of your KOReader installation.
 
-| Mode | Behavior |
-|---|---|
-| **Personal** | No override — the plugin behaves exactly as configured by your individual settings. This is the *only* editable/custom profile; every appearance/behavior change you make is always saved into this profile. |
-| **Minimal** | Hides the entire footer action bar; only the definition is shown. Fixed preset, not editable. |
-| **Full** | Forces every dictionary/button/tool to be visible, in your configured dictionary order. Fixed preset, not editable. |
-| **Language learner** | Prioritizes translation dictionaries over definition ones, then monolingual definition dictionaries; hides Wikipedia and full-text search. Fixed preset, not editable. |
+Typical locations include:
 
-📍 **Location:** `Floating Dictionary → Appearance → Display mode`
+- **Kobo:** `.adds/koreader/plugins/`
+- **Kindle:** `koreader/plugins/`
+- **Android:** the `plugins` folder inside your KOReader data directory
 
----
-
-## 🎨 Popup Styles
-
-| Style | Description |
-|---|---|
-| **Classic** *(default)* | The plugin's original look: rounded card corners, generous padding, buttons stretched to fill the row width, hairline gray separators between buttons. |
-| **Kobo** | A tighter, flatter alternative inspired by Kobo's native reader UI: fully square corners (no radius), an italic headword, smaller/compact left-aligned icon buttons with even spacing instead of full-width separators, and lighter-gray rule lines. |
-
-Style only ever changes **how** the same data is drawn — never what data is shown or how it behaves. Every other feature (custom icons, button reorder, font size, display modes, card height, border settings, breadcrumb cascade, font override, etc.) works identically and automatically under either style.
-
-📍 **Location:** `Floating Dictionary → Appearance → Popup style`
+5. Restart KOReader.
+6. Open a book.
+7. Open the main menu and go to the settings section.
+8. You should see **Floating Dictionary** in the KOReader menu.
 
 ---
 
-## 🔘 Footer Action Buttons
+## First Steps
 
-The buttons available on the **large card's** bottom bar. You can choose which ones are visible, their order, and give each a custom label or icon.
+After installation:
 
-| Button | Function |
-|---|---|
-| **Highlight** | Highlights the current word/selection using your active highlight style. |
-| **Fulltext search** | Full-text search inside the currently open document. |
-| **Wikipedia** | Looks up the word/selection on Wikipedia. |
-| **Save for review** | Adds the word to that book's Word Review history. |
-| **Translate** | Automatically detects the looked-up word's language and translates it using installed translation dictionaries. |
-| **◀ Previous result / Next result ▶** | Navigates between multiple dictionary results for the same lookup. |
-| **Buttons from other plugins** | Placeholder slot for buttons contributed by other installed dictionary plugins (e.g. X-Ray). |
-
-📍 **Location:** `Floating Dictionary → Appearance → Visible buttons`
-From there you can: check/uncheck each button, move it up/down, and assign it a custom text label or a custom `.svg` icon (placed inside the `floatingdictionary-images/` folder next to the plugin). If a custom icon file goes missing later, the button silently falls back to its custom label, then to its default initial letter — nothing breaks.
+1. Open a book and long-press a word.
+2. The Floating Dictionary card should appear.
+3. Open the KOReader menu and select **Floating Dictionary**.
+4. Make sure **Enable Floating Dictionary** is turned on.
+5. Go to **Appearance > Popup style** and choose between:
+   - Classic
+   - Kobo
+   - Kindle
+6. Go to **Context menu > Buttons shown in preview** to choose which text buttons appear in the dictionary card.
+7. If you want buttons provided by other plugins, configure them under **Context menu > Other plugins**.
 
 ---
 
-## 📋 Small Selection Menu
+## Settings Reference
 
-A **separate, independent mini-menu** (not the large card) that appears right next to any text selection. It can be turned on/off independently of the big floating card — you can have either one, both, or neither.
+The plugin adds a **Floating Dictionary** entry to the KOReader menu.
 
-Available buttons (choose up to 3, with your own order):
+### Enable Floating Dictionary
+
+Turns the floating dictionary card on or off.
+
+### Check for Updates
+
+Checks GitHub Releases for a newer version of Floating Dictionary and installs it when available.
+
+---
+
+### Appearance
+
+#### Language
+
+Sets the interface language used by the plugin.
+
+#### Preview Font
+
+Overrides the font family used inside the floating dictionary card.
+
+#### Popup Style
+
+Choose between:
+
+- **Classic**
+- **Kobo**
+- **Kindle**
+
+#### Popup Position
+
+Controls where the dictionary card appears.
+
+- **Near word:** the card is positioned close to the selected word.
+- **Screen edge:** the card is docked to the top or bottom edge of the screen.
+
+The **Kindle** style always uses **Screen edge** positioning.
+
+#### Card Height
+
+Sets the maximum height of the dictionary card as a percentage of the screen.
+
+#### Popup Font Size
+
+Controls the font size used inside the dictionary card.
+
+#### Popup Border
+
+Adjusts the border thickness and darkness.
+
+#### Highlight Styles
+
+Controls the appearance of highlights created through the plugin.
+
+#### Card Transition Animations
+
+Enables or disables popup transition animations.
+
+---
+
+### Dictionary
+
+#### Dictionary Order
+
+Controls the order in which installed dictionaries are searched.
+
+Tap a dictionary to select it, then use:
+
+- **Move up**
+- **Move down**
+
+The dictionary at the top of the list is given priority.
+
+#### Fast Lookups (FastDict)
+
+Turns the FastDict lookup engine on or off.
+
+See [Fast Lookups (FastDict)](#fast-lookups-fastdict) for more information.
+
+---
+
+### Context Menu
+
+#### Buttons Shown in Preview
+
+Controls the text buttons displayed in the dictionary card.
+
+You can:
+
+- Show or hide buttons.
+- Reorder buttons.
+- Rename button labels.
+- Assign custom icons.
+
+Only text buttons are managed here. Previous/next arrows and buttons supplied by other plugins are managed separately.
+
+#### Enable Small Menu
+
+Turns the small selection menu on or off.
+
+#### Small Menu Buttons
+
+Choose up to five buttons and configure their order.
+
+#### Other Plugins
+
+Manages buttons supplied by other dictionary plugins.
+
+You can control their visibility, position, text, and icons.
+
+#### Smart Highlight
+
+Turns any selection of two or more words into an instant highlight without opening the dictionary popup.
+
+Smart Highlight is **off by default**.
+
+Single-word selections are not affected.
+
+---
+
+### Word Review
+
+Contains the settings for the Word Review feature, including where words saved with **Save for review** are stored.
+
+---
+
+## Popup Styles
+
+Floating Dictionary provides three popup styles. All styles use the same dictionary data and provide the same core functionality. Only the presentation changes.
+
+### Classic
+
+The default style.
+
+A floating card with rounded corners and a footer row of buttons stretched across the available width.
+
+### Kobo
+
+A layout inspired by Kobo's dictionary presentation.
+
+The card displays:
+
+1. The selected word.
+2. The definition.
+3. The dictionary name.
+
+Footer buttons are compact and grouped toward the left.
+
+When multiple dictionary results are available, the result counter is displayed next to the word.
+
+### Kindle
+
+A full-width dictionary panel docked to the screen edge.
+
+It uses square corners and a single line along its top edge.
+
+The Kindle style has the following layout:
+
+- The **headword** is displayed in bold.
+- The **phonetic pronunciation** appears on the same line when provided by the dictionary.
+- The **definition body** is displayed in italics.
+- The **dictionary source** appears at the bottom of the card, below a thin separator line.
+- Configured buttons appear as a row of tabs next to **Dictionary**, following the order configured by the user.
+- Hidden buttons are not displayed.
+- Tab labels are not truncated. If the labels do not fit, spacing is reduced first, followed by font-size reduction if necessary.
+- Only the previous/next navigation arrows remain in the footer.
+
+The Kindle style always uses **Screen edge** positioning regardless of the saved **Popup position** setting.
+
+When switching back to Classic or Kobo, the previously configured popup position is restored.
+
+---
+
+## Footer Buttons and Other Plugins
+
+### Text Buttons
+
+Open:
+
+**Floating Dictionary > Context menu > Buttons shown in preview**
+
+From there you can:
+
+- Show or hide individual buttons.
+- Move buttons up or down.
+- Set a custom **Button Text**.
+- Leave Button Text empty to restore the default single-letter label.
+- Choose a custom icon from the icons available on your device.
+
+This menu only manages text buttons.
+
+Previous/next navigation arrows and buttons supplied by other plugins are managed elsewhere.
+
+### Buttons from Other Plugins
+
+Open:
+
+**Floating Dictionary > Context menu > Other plugins**
+
+Use **Show buttons from other plugins** as the master switch.
+
+All detected buttons supplied by other plugins are listed with their current position and visibility state.
+
+Select a plugin button and configure:
+
+- **Move up**
+- **Move down**
+- **Hide**
+- **Show**
+- **Button text**
+- **Button icon**
+
+When you activate one of these buttons:
+
+1. The Floating Dictionary card closes.
+2. The selected plugin performs its own action.
+3. The highlight of the original word is cleared when the other plugin's window closes.
+
+### Wikipedia and Translate
+
+Wikipedia and Translate require an internet connection.
+
+If Wi-Fi is disabled, KOReader asks whether you want to connect.
+
+If you decline the connection request, the dictionary card remains open.
+
+---
+
+## Small Selection Menu
+
+The Small Selection Menu appears when you select text.
+
+By default, it provides actions such as:
 
 - Highlight
+- Note
+- Save
+
+### Enabling the Menu
+
+Go to:
+
+**Floating Dictionary > Context menu > Enable small menu**
+
+### Choosing Buttons
+
+Go to:
+
+**Floating Dictionary > Context menu > Small menu buttons**
+
+You can select up to **five buttons**.
+
+Available buttons include:
+
+- Text buttons configured under **Buttons shown in preview**
 - Add Note
-- Save for review
-- Wikipedia
-- Translate
-- Fulltext search
+- Buttons supplied by other plugins
 
-📍 **Location:** `Floating Dictionary → Context menu → Small menu buttons`
+Buttons supplied by other plugins can have their own **Button Text** for the Small Selection Menu. This text is configured separately from the button text used in the dictionary card.
 
-> 💡 Example: keep only the small menu active (for quick highlighting/saving) while turning the big definition card off entirely — or the reverse.
+The menu never displays more than five buttons.
 
----
-
-## ✍️ Smart Highlight
-
-When **enabled**: selecting 2 or more words instantly highlights them — no popup, no menu of any kind — using your current highlight settings, exactly as if you'd used KOReader's native highlighting directly.
-
-- Single-word selections (including hyphenated ones like *well-known*) are **never** affected — they still open the dictionary normally.
-- **Very long press:** if you keep your finger resting on the final selection for the long-hold time (KOReader's long-press interval), Smart Highlight steps aside and KOReader's native highlight menu (Select, Search, Add note, other plugins' actions…) opens instead — the same way a very long press works on a single word.
-- When **disabled** *(default)*, multi-word selections follow KOReader's own native "long-press on text" setting instead, exactly as if this plugin weren't installed.
-
-📍 **Location:** `Floating Dictionary → Context menu → Smart Highlight`
+If five buttons are already enabled, you must remove one before adding another.
 
 ---
 
-## 📚 Dictionary Order
+## Word Review
 
-Lets you rank installed dictionaries — definitions, translations, synonyms, antonyms, etymology, conjugations, pronunciation, usage examples, thesauri, or any other kind KOReader can query — in whatever priority order you prefer.
+Word Review allows you to save words while reading and review them later.
 
-1. Open the dictionary order submenu.
-2. Tap a dictionary to select it.
-3. Use **"Move up" / "Move down"** to change its priority.
+### Saving a Word
 
-Dictionaries higher on the list appear first whenever you look up a word.
+Use **Save for review** from:
 
-📍 **Location:** `Floating Dictionary → Dictionary → Dictionary order`
+- The Floating Dictionary card.
+- The Small Selection Menu.
 
----
+### Storage
 
-## 🔌 Buttons From Other Plugins
+The destination can be configured as:
 
-If you have other dictionary-related plugins installed (e.g. **X-Ray**) that add their own buttons to KOReader's native popup, Floating Dictionary can **auto-detect** them and surface them inside its own card's button row.
+- **Word Review**
+- **Vocabulary Builder**
+- **Both**
 
-- Toggle independently at any time.
-- Uses the modern `ReaderDictionary:addToDictButtons` API; if a third-party button can't be read correctly, it's simply skipped — it never breaks the card.
+The default is **Both**.
 
-📍 **Location:** `Floating Dictionary → Dictionary → Show buttons from other plugins`
+### Per-Book Review
 
----
+Saved words are associated with the book in which they were saved.
 
-## ⚡ FastDict — Instant Lookups
+The review card can also appear when you open a book.
 
-FastDict is a **built-in StarDict engine**, written in pure LuaJIT, that answers exact-word lookups **without spawning the external `sdcv` process**, making lookups noticeably faster.
-
-- Fuzzy searches, special query syntax, unsupported dictionaries, or any internal engine error automatically **fall through** to the original `sdcv` code path — enabling FastDict can only ever speed lookups up, it can never break them.
-- The first time each dictionary is used, FastDict builds an **offset/index cache** on disk (a one-time, potentially slow scan); this cache is what makes subsequent lookups fast.
-- Cache building runs on a UI tick so a "building…" progress message actually gets painted before the (blocking) scan starts.
-
-| Option | Function |
-|---|---|
-| **Enable instant lookups** | Turns the FastDict engine on/off. |
-| **Build index caches now** | Builds indexes only for dictionaries that don't have one yet. |
-| **Rebuild index caches** | Forces a full rebuild of every dictionary's index, even existing ones. |
-| **Status** | Live readout: `idle` (not loaded yet), `error — using sdcv` (engine failed and is disabled for this session, see log), or a count of how many dictionaries are served via FastDict vs. via `sdcv`. |
-
-📍 **Location:** `Floating Dictionary → Dictionary → FastDict`
+Word Review is additionally available from the KOReader file browser, where you can manage your saved words.
 
 ---
 
-## 🧠 Word Review
+## Fast Lookups (FastDict)
 
-A per-book, spaced-repetition-style **"word of the day"** companion, built as an independent module (`wordreview.lua`) so it can evolve on its own.
+**FastDict** is an in-process StarDict lookup engine designed to make exact-word dictionary lookups faster.
 
-### How it works
+Instead of starting KOReader's external dictionary process for every lookup, FastDict performs supported lookups directly inside KOReader.
 
-- Every time you open a book, WordReview shows **one word from that book's own lookup history** (favoring, but not restricting itself to, words looked up more often), using the exact same floating card the plugin already uses for normal lookups.
-- If the book has **no lookup history yet** (first-ever open, or no searches performed so far), it falls back to a **random entry** from your installed dictionaries, so there's always something useful to see.
-- History is stored **per book**, inside that book's own `.sdr` sidecar directory — the same place KOReader stores every other piece of per-book state — using the same save format KOReader's own `DocSettings` uses (no extra dependency introduced).
+Enable or disable it under:
 
-### Word Sources
+**Floating Dictionary > Dictionary > Fast lookups (FastDict)**
 
-| Mode | Description |
-|---|---|
-| **Only saved words** | Only words you explicitly saved via "Save for review" (large card or small menu). |
-| **Only random words** | Only random headwords pulled from your installed dictionaries. |
-| **Both** *(default)* | Tries your saved words first, falling back to a random headword when nothing has been saved yet for that specific book. |
+If FastDict cannot handle a particular lookup, KOReader automatically falls back to its normal dictionary lookup method.
 
-### Triggers
+Fallbacks can occur with:
 
-- ☑️ **Show review word when opening a book**
-- ☑️ **Show review word when waking from sleep**
+- Fuzzy searches.
+- Special query syntax.
+- Unsupported dictionaries.
+- Engine errors.
+- Other lookup types not supported by FastDict.
 
-Both checkboxes are fully independent — enable either, both, or neither.
-
-### Managing Saved Words
-
-The **"Manage saved words"** screen is a Kindle Vocabulary-Builder-style UI with three tabs:
-
-| Tab | Contents |
-|---|---|
-| **Words** | All words saved so far, across your library. |
-| **Random** | Randomly sampled dictionary headwords. |
-| **Mastered** | Words you've explicitly marked as mastered. |
-
-From this screen you can:
-
-- Browse words in a compact grid (short, fixed-size boxes — long words are truncated with `...` rather than resizing the grid).
-- Mark/unmark a word as **"Mastered"** (shown with a small discreet checkmark).
-- Multi-select words for bulk actions.
-- Enter **Flashcards mode**: a full-screen card shows the headword (auto-shrunk to fit on one line if long), the original sentence/context it was found in (with the target word italicized), and a **"See Definition"** view you can reach with a swipe gesture — the same gesture KOReader's dictionary popup uses to switch between installed dictionaries.
-- Mark a card as mastered directly from the flashcard view ("Exit Flashcards" / "Mark as Mastered" controls).
-
-📍 **Location:** `Floating Dictionary → Word Review`
+Enabling FastDict should therefore only affect lookup speed. Unsupported lookups continue to use KOReader's normal method.
 
 ---
 
-## 🎬 Card Transition Animation
+## Updating
 
-The plugin includes a self-contained "wipe" page-turn-style animation (adapted from the standalone page-turn-animation approach) used when the floating card opens or closes.
+### Automatic Update
 
-- Only ever fires when **this plugin's own card** is shown or closed — it never affects ordinary page turns or any other widget in KOReader.
-- Does not require any external animation patch to be installed separately; everything needed is embedded in the plugin.
-- On **MTK-based devices**, the software animation is automatically skipped (a hardware limitation, not a bug) — everything else keeps working normally.
+Open:
 
-📍 **Location:** `Floating Dictionary → Appearance → Enable card transition animations`
+**Floating Dictionary > Check for updates**
 
----
+The plugin checks GitHub Releases for a newer version and installs it.
 
-## 🖌️ Appearance & Customization
+### Manual Update
 
-| Setting | Controls |
-|---|---|
-| **Popup font size** | Text size for word/definition text in every dictionary popup. Fixed list of point sizes: `12, 16, 20, 22, 24, 26, 28, 30, 34, 38, 44`. |
-| **Font family** | Uses the book's own detected font by default, or force-overrides the popup's font with a specific installed face. |
-| **Card height** | The floating card's height as a fraction of the screen height — useful for tuning small (6") vs. large (10"+) screens. |
-| **Popup border thickness** | Border thickness of every dictionary popup. |
-| **Popup border darkness** | From `0` (white/invisible) to `1` (solid black). |
-| **Popup position mode** | `Near word` (hugs the selection, default) or `Screen edge` (always anchors flush to top/bottom regardless of where the selection is). Both modes still auto-pick top vs. bottom based on which half of the screen the selection is in. |
-| **Highlight styles** | Per-style thickness/darkness for the lines/dots used when highlighting text. |
-| **Custom button icons** | Replace a button's default initial-letter fallback with your own `.svg`, placed in `floatingdictionary-images/`. |
-| **Custom button labels** | Change the text/initial shown on any footer or small-menu button, independent of any icon. |
+You can also update manually:
 
-📍 **Location:** `Floating Dictionary → Appearance`
+1. Download the new release.
+2. Unzip it.
+3. Replace the existing `.koplugin` folder with the new version.
+4. Restart KOReader.
 
 ---
 
-## ⚙️ Full Settings Reference
+## Troubleshooting
 
-For advanced users / contributors, every persisted setting key used by the plugin (stored via KOReader's `G_reader_settings`):
+### The AI Button or Another Plugin Button Does Not Appear
 
-| Setting key | Purpose |
-|---|---|
-| `floatingdictionary_enabled` | Master on/off switch for the floating card. |
-| `floatingdictionary_animations_enabled` | Card transition animation on/off. |
-| `floatingdictionary_visible_actions` | Which footer buttons are shown. |
-| `floatingdictionary_actions_order` | Order of footer buttons. |
-| `floatingdictionary_smallmenu_buttons` | Which small-menu buttons are shown, and their order. |
-| `floatingdictionary_small_menu_enabled` | Small menu on/off. |
-| `floatingdictionary_action_custom_labels` | Per-button custom text labels. |
-| `floatingdictionary_action_custom_icons` | Per-button custom `.svg` icon file. |
-| `floatingdictionary_dictionary_order` | User-ranked dictionary priority list. |
-| `floatingdictionary_show_external_buttons` | Show/hide buttons from other plugins. |
-| `floatingdictionary_smart_highlight_enabled` | Smart Highlight on/off. |
-| `floatingdictionary_popup_font_size` | Popup text size. |
-| `floatingdictionary_card_height_ratio` | Card height as a fraction of screen height. |
-| `floatingdictionary_popup_position_mode` | `near_word` or `screen_edge`. |
-| `floatingdictionary_popup_border_thickness` | Popup border thickness. |
-| `floatingdictionary_popup_border_darkness` | Popup border darkness (0–1). |
-| `floatingdictionary_font_family` | Font family override (unset = use book's font). |
-| `floatingdictionary_display_mode` | `personal`, `minimal`, `full`, or `language`. |
-| `floatingdictionary_popup_style` | `classic` or `kobo`. |
-| `floatingdictionary_fancy_highlight_thickness` | Per-style highlight line thickness. |
-| `floatingdictionary_underline_darkness` | Per-style highlight line darkness. |
-| `floatingdictionary_fastdict_enabled` | FastDict on/off. |
-| `floatingdictionary_save_destination` | Where "Save for review" words are mirrored to (Word Review and/or a compatible Vocabulary Builder plugin, if installed). |
+Go to:
 
-> These keys are documented here for transparency/debugging; you should not need to edit them by hand — everything is reachable from the in-app menu.
+**Floating Dictionary > Context menu > Other plugins**
 
----
+Make sure:
 
-## 🗺️ Menu Map
+**Show buttons from other plugins**
 
-```
-Floating Dictionary
-├── Enable Floating Dictionary            (master switch)
-├── Appearance
-│   ├── Display mode                      (Personal / Minimal / Full / Language learner)
-│   ├── Popup style                       (Classic / Kobo)
-│   ├── Visible buttons                   (choose, reorder, customize)
-│   ├── Popup font size
-│   ├── Font family
-│   ├── Card height
-│   ├── Popup border thickness / darkness
-│   ├── Popup position mode
-│   ├── Highlight styles
-│   └── Enable card transition animations
-├── Dictionary
-│   ├── Dictionary order
-│   ├── Show buttons from other plugins
-│   └── FastDict
-│       ├── Enable instant lookups
-│       ├── Build index caches now
-│       ├── Rebuild index caches
-│       └── Status (read-only)
-├── Context menu
-│   ├── Buttons shown in preview
-│   ├── Enable small menu
-│   ├── Small menu buttons
-│   └── Smart Highlight
-└── Word Review
-    ├── Manage saved words (Words / Random / Mastered tabs, Flashcards mode)
-    ├── Word source (Only saved / Only random / Both)
-    ├── Show review word when opening a book
-    └── Show review word when waking from sleep
-```
+is enabled.
+
+Then:
+
+1. Find the desired button in the list.
+2. Select it.
+3. Set it to **Show**.
+
+If the button is not listed at all, the other plugin may not be registering its button with the dictionary.
+
+Check that the other plugin is:
+
+- Installed correctly.
+- Enabled.
+- Up to date.
+- Compatible with your version of KOReader.
+
+Buttons from other plugins can also be added to the Small Selection Menu under:
+
+**Context menu > Small menu buttons**
 
 ---
 
-## 🚀 How to Enable / Disable Each Feature
+### My Custom Button Text Is Cut Off
 
-| I want to... | Go to... |
-|---|---|
-| Turn the whole plugin off and go back to KOReader's native dictionary | `Floating Dictionary → Enable Floating Dictionary` |
-| Change which buttons show on the big card | `Appearance → Visible buttons` |
-| Use only the small menu, without the big card | Disable `Enable Floating Dictionary`, keep `Enable small menu` on |
-| Make 2+ word selections auto-highlight | `Context menu → Smart Highlight` |
-| Speed up lookups | `Dictionary → FastDict → Enable instant lookups` |
-| See a review word every time I open a book | `Word Review → Show review word when opening a book` |
-| Save words to review later | Select text → tap **"Save for review"** (big card or small menu) |
-| Review saved words as flashcards | `Word Review → Manage saved words → (pick a word) → Flashcards` |
-| Change the whole visual look | `Appearance → Popup style` |
-| Use my own icons on the buttons | Drop `.svg` files into `floatingdictionary-images/` → `Appearance → Visible buttons → (button) → Icon` |
-| Anchor the popup to a fixed screen edge instead of near the word | `Appearance → Popup position mode → Screen edge` |
-| Show every available tool/dictionary regardless of my personal settings | `Appearance → Display mode → Full` |
-| Get a distraction-free popup with just the definition | `Appearance → Display mode → Minimal` |
+Update to **Floating Dictionary 6.2.0**.
+
+Earlier versions imposed an approximately 80-pixel limit on custom button labels.
+
+Version 6.2.0 removes this limitation and allows the interface to adjust the available space more appropriately.
 
 ---
 
-## ⚠️ Known Limitations
+### Wikipedia or Translate Does Nothing
 
-- 🖥️ **KOReader-only** — this is not a standalone app or browser extension.
-- ⚡ **FastDict** only accelerates **exact** lookups; fuzzy searches or special query syntax always fall back to `sdcv`.
-- 🌐 **Translate** and **Wikipedia** buttons depend on having the relevant translation dictionaries installed and/or an internet connection, depending on your KOReader/network setup.
-- 🈳 **Automatic language detection** for translation is heuristic (based on the looked-up word's spelling); it can misfire on very short or ambiguous words.
-- 🖼️ **Custom icons** must be `.svg` files you place manually into `floatingdictionary-images/` — the plugin does not fetch, generate, or bundle icon packs.
-- 📱 On **MTK devices**, the card transition animation is automatically disabled — this is an intentional hardware limitation, not a bug.
-- 🧩 **Third-party plugin buttons** only appear if that plugin uses KOReader's modern `addToDictButtons` API; older plugins may not integrate.
-- 💾 **Word Review** history is stored per book inside its `.sdr` sidecar folder; deleting that folder deletes that book's review history.
-- 🔤 The **"Language learner"** display mode is a fixed, non-editable preset — to customize its behavior you must use the **Personal** mode instead.
-- 🔀 **Cascading (chained) lookups** — tapping a cross-reference link inside a definition — always stack with a breadcrumb trail; this behavior is not currently user-configurable.
+Check that your device is connected to the internet.
+
+For Translate, also check KOReader's own translator settings.
 
 ---
 
-## 🩺 Troubleshooting
+### The Small Selection Menu Does Not Appear
 
-| Problem | Likely cause / fix |
-|---|---|
-| Plugin menu doesn't appear | Confirm the folder is named exactly `floatingdictionary.koplugin` and contains `_meta.lua`. |
-| Lookups feel slow | Enable **FastDict** and build the index caches from `Dictionary → FastDict → Build index caches now`. |
-| Another dictionary plugin's buttons don't show up | Check `Dictionary → Show buttons from other plugins`, and confirm that plugin uses the modern button-registration API. |
-| A custom icon doesn't show on a button | Make sure the `.svg` file is inside `floatingdictionary-images/` next to the plugin, then re-select it from the button's settings menu. |
-| FastDict shows "Status: error — using sdcv" | Check the KOReader log — the engine may have hit an error and disabled itself for the current session only; it will retry on next app start. |
-| Word Review shows nothing useful | Make sure at least one dictionary is installed (for the random fallback) and/or that you've looked up or saved words in that specific book. |
-| Animations don't play | Confirm they're enabled in `Appearance`, and note that MTK-based devices intentionally skip the software animation. |
+Make sure:
+
+**Context menu > Enable small menu**
+
+is enabled.
+
+If you are using an older version, update to **6.2.0**. Version 6.2.0 fixes an issue with how the Small Selection Menu resolved its own buttons.
 
 ---
 
-## ❓ FAQ
+### Display Mode, Select Mode, or Extend Last Highlight Are Missing
 
-**Does this replace my installed dictionaries?**
-No. It reuses whatever StarDict dictionaries you already have installed in KOReader — it only changes how lookup results are presented and interacted with.
+These options were removed in version **6.2.0**.
 
-**Can I use the small menu and the big card at the same time?**
-Yes, they're independent. You can also disable either one and keep only the other.
-
-**Will FastDict ever give me wrong definitions?**
-No — if FastDict can't answer a lookup (unsupported dictionary, fuzzy search, engine error) it transparently defers to KOReader's normal `sdcv` lookup path, so results are always at least as correct as without the plugin.
-
-**Does Word Review sync between devices?**
-No — history is stored locally per book, inside that book's own sidecar folder on the device.
-
-**Can I have different button sets for the big card vs. the small menu?**
-Yes — `Appearance → Visible buttons` controls the big card, while `Context menu → Small menu buttons` controls the small menu, completely independently.
+See [What's New in 6.2.0](#whats-new-in-620).
 
 ---
 
-## 🗃️ Plugin Files
+## What's New in 6.2.0
 
-| File | Contents |
-|---|---|
-| `_meta.lua` | Plugin metadata (name, full name, description) used by KOReader to list the plugin. |
-| `main.lua` | Core logic: floating card, footer buttons, popup styles, FastDict integration, animations, all settings menus, Smart Highlight, cascading lookups. |
-| `wordreview.lua` | Self-contained Word Review module: per-book history storage, "Manage saved words" screen (Words / Random / Mastered tabs), and the Flashcards review mode. |
-| `engine.lua` *(referenced, not shown here)* | The pure-LuaJIT StarDict engine used by FastDict for instant, in-process lookups. |
-| `floatingdictionary-images/` | Optional folder you create yourself to hold custom `.svg` icons for buttons. |
+### Added
+
+- **Kindle popup style.**
+- **Other Plugins** submenu for managing buttons supplied by other plugins.
+- Small Selection Menu now supports up to **five buttons**.
+- Small Selection Menu now supports buttons from other plugins.
+- Other-plugin buttons have their own configurable **Button Text** for the Small Selection Menu.
+- Connection check before launching Wikipedia or Translate.
+
+### Improved and Fixed
+
+- Custom **Button Text** is no longer truncated.
+- Small Selection Menu cards are no longer limited to 62% of the screen width.
+- **Buttons shown in preview** now lists only text buttons.
+- Cleaner behavior when launching buttons supplied by other plugins.
+- Cascade lookups preserve the configured popup position.
+- Small Selection Menu button resolution has been fixed.
+
+### Removed
+
+The following options were removed in version 6.2.0:
+
+- Display Mode:
+  - Personal
+  - Minimal
+  - Full
+  - Language learner
+- Select Mode
+- Extend Last Highlight
 
 ---
 
-## 🤝 Contributing
+## License and Credits
 
-Found a bug or have an idea? Open an **issue** or a **pull request** in this repository. Documentation fixes, translations, and new features are all welcome.
+Floating Dictionary is a plugin for **KOReader**.
 
----
-
-<p align="center">Made with 📖 for KOReader readers.</p>
+See the repository's license file and individual source files for licensing information and third-party credits.
