@@ -8,8 +8,6 @@ The plugin also includes a configurable selection menu, per-book word review, di
 
 **Current version: 6.2.0**
 
-[Screenshots go here]
-
 ---
 
 ## Table of Contents
@@ -27,7 +25,6 @@ The plugin also includes a configurable selection menu, per-book word review, di
 11. [Updating](#updating)
 12. [Troubleshooting](#troubleshooting)
 13. [What's New in 6.2.0](#whats-new-in-620)
-14. [License and Credits](#license-and-credits)
 
 ---
 
@@ -551,9 +548,3 @@ The following options were removed in version 6.2.0:
 - Extend Last Highlight
 
 ---
-
-## License and Credits
-
-Floating Dictionary is a plugin for **KOReader**.
-
-See the repository's license file and individual source files for licensing information and third-party credits.
