@@ -33,6 +33,14 @@ local _ = L10n.gettext
 -- OTA updater: checks GitHub Releases for a newer version and installs it.
 -- See addToMainMenu below ("Check for updates").
 local Updater = require("updater")
+-- Note: NetworkMgr (used to gate Wikipedia/Translate behind a working
+-- connection -- see runAction/runSmallMenuAction/onActionButton below) is
+-- deliberately required locally inside each of those functions instead of
+-- once here at module scope: this file's main chunk is already at
+-- LuaJIT's 200-local-variable ceiling, so one more top-level `local` fails
+-- to load with "main function has more than 200 local variables". A local
+-- require inside a function costs nothing extra (require caches the
+-- module in package.loaded after the first call).
 
 -- FastDict: in-process StarDict engine used to answer instant dictionary
 -- lookups (see the "FastDict" section near the end of this file). Pure
@@ -924,9 +932,10 @@ local SETTING_POPUP_FONT_SIZE = "floatingdictionary_popup_font_size"
 -- can each pick a card size that fits them well. Replaces the old fixed
 -- PANEL_MAX_HEIGHT_RATIO constant, which is now only the default value.
 local SETTING_CARD_HEIGHT_RATIO = "floatingdictionary_card_height_ratio"
--- Whether the dictionary popup (and the small "Highlight/Add Note" menu
--- alongside it) hugs the selected word itself, or always anchors flush to
--- the top/bottom screen edge regardless of where the selection is. Both
+-- Whether the dictionary popup hugs the selected word itself, or always
+-- anchors flush to the top/bottom screen edge regardless of where the
+-- selection is. The small "Highlight/Add Note" menu is NOT affected: it
+-- always stays next to the selection. Both
 -- modes still pick top vs. bottom automatically based on which half of the
 -- screen the selection is in (see shouldAnchorTop) -- this setting only
 -- controls how close to the selection the card lands within that chosen
@@ -957,43 +966,12 @@ local SETTING_FONT_FAMILY = "floatingdictionary_font_family"
 -- translation dictionaries for that language pair. See guessWordLanguage()
 -- and getTranslationDictionaries() below.
 
--- Display mode: a single exclusive choice (radio-style, not independent
--- switches) that layers a few opinionated overrides on top of whatever the
--- user already configured via "Buttons shown in preview" / "Show buttons
--- from other dictionary plugins" / etc. Switching modes takes effect
--- immediately since every render path re-reads it live (getVisibleActions,
--- buildPreviewResults) instead of it being baked into any cached state.
---   DISPLAY_MODE_PERSONAL - no override: the plugin behaves exactly as
---                           configured by the individual settings above.
---                           This is the only mode the user can edit --
---                           every popup appearance/behavior setting always
---                           saves into this mode, and selecting it always
---                           applies exactly that saved configuration
---                           (default).
---   DISPLAY_MODE_FULL     - forces every dictionary/button/tool visible, in
---                           the user-configured dictionary order. Fixed
---                           preset, not editable.
---   DISPLAY_MODE_MINIMAL  - hides the entire footer action bar. Fixed
---                           preset, not editable.
---   DISPLAY_MODE_LANGUAGE - prioritizes translation dictionaries over
---                           definition ones, then monolingual definition
---                           dictionaries; hides Wikipedia and fulltext
---                           search. Fixed preset, not editable.
-local SETTING_DISPLAY_MODE = "floatingdictionary_display_mode"
-local DISPLAY_MODE_PERSONAL = "personal"
-local DISPLAY_MODE_FULL = "full"
-local DISPLAY_MODE_MINIMAL = "minimal"
-local DISPLAY_MODE_LANGUAGE = "language"
-
--- Order here is also the order the modes are listed in the settings menu:
--- Personal (the only editable/custom profile) first, then the three fixed
--- presets.
-local DISPLAY_MODES = {
-	{ id = DISPLAY_MODE_PERSONAL, text = _("Personal") },
-	{ id = DISPLAY_MODE_MINIMAL, text = _("Minimal") },
-	{ id = DISPLAY_MODE_FULL, text = _("Full") },
-	{ id = DISPLAY_MODE_LANGUAGE, text = _("Language learner") },
-}
+-- NOTE: The previous "Display mode" feature (Personal / Minimal / Full /
+-- Language learner) has been removed entirely, along with its setting key,
+-- its constants, its generator/menu entry, and every render-path check
+-- that consulted it. Footer visibility is now driven solely by
+-- isActionVisible()/isShowExternalButtonsEnabled(), and translation-first
+-- ordering is no longer toggled per display mode.
 
 -- FastDict: whether instant (in-process) lookups are enabled. When on, the
 -- patched ReaderDictionary:rawSdcv (installed by patchFastDict below) tries
@@ -1007,11 +985,10 @@ local SETTING_FASTDICT_ENABLED = "floatingdictionary_fastdict_enabled"
 -- Popup style (presentation layer) -------------------------------------------
 --
 -- Everything above/below this block (cascade logic, button actions,
--- dictionary ordering, display modes, FastDict, word review, ...) is pure
--- plugin *logic* and stays completely style-agnostic: it never changes based
--- on which popup style is active. Only two things vary per style, both
--- consulted at render time by FloatingDictionaryPopup/getBaseCss/
--- getDictionaryPanelCss:
+-- dictionary ordering, FastDict, word review, ...) is pure plugin *logic*
+-- and stays completely style-agnostic: it never changes based on which popup
+-- style is active. Only two things vary per style, both consulted at render
+-- time by FloatingDictionaryPopup/getBaseCss/getDictionaryPanelCss:
 --
 --   1. LAYOUT  -- native-widget geometry constants (paddings, separator
 --      thickness, card radius, breadcrumb treatment, ...), read via
@@ -1022,27 +999,28 @@ local SETTING_FASTDICT_ENABLED = "floatingdictionary_fastdict_enabled"
 --      getPopupStyleHeaderCss().
 --
 -- Every current and future popup feature (custom icons/SVGs, letter
--- fallback, button rename/reorder/show-hide, font size, display modes, card
--- height, border thickness/darkness, breadcrumb cascade, font family
--- override, ...) is implemented exactly once, upstream of this block, and
--- automatically works under any style: styles only ever change how the same
--- data is drawn, never what data is shown or how it behaves.
---
--- Adding a future 3rd/4th style means adding one more entry to
--- POPUP_STYLE_LAYOUT (a layout table) plus a branch in
--- getPopupStyleHeaderCss, and one line in POPUP_STYLES -- no other code
--- anywhere in the plugin needs to change.
+-- fallback, button rename/reorder/show-hide, font size, card height, border
+-- thickness/darkness, breadcrumb cascade, font family override, ...) is
+-- implemented exactly once, upstream of this block, and automatically works
+-- under any style: styles only ever change how the same data is drawn, never
+-- what data is shown or how it behaves.
 -- =============================================================================
 
 local SETTING_POPUP_STYLE = "floatingdictionary_popup_style"
 local POPUP_STYLE_CLASSIC = "classic"
 local POPUP_STYLE_KOBO = "kobo"
+-- "Kindle": word on top, definition body, dictionary source citation last
+-- (italic, flush left, hairline rule above it) -- same word/definition/meta
+-- *ordering* as Kobo (see the html_body branch in buildPreviewPayload),
+-- just with the reference screenshot's own typography instead of Kobo's.
+local POPUP_STYLE_KINDLE = "kindle"
 local POPUP_STYLE_DEFAULT = POPUP_STYLE_CLASSIC
 
 -- Order here is also the order styles are listed in the settings menu.
 local POPUP_STYLES = {
 	{ id = POPUP_STYLE_CLASSIC, text = _("Classic") },
 	{ id = POPUP_STYLE_KOBO, text = _("Kobo") },
+	{ id = POPUP_STYLE_KINDLE, text = _("Kindle") },
 }
 
 -- Per-style native-widget layout constants. "classic" reproduces the
@@ -1106,6 +1084,48 @@ local POPUP_STYLE_LAYOUT = {
 		-- separators at all in the reference image, just even spacing).
 		button_compact_gap = Screen:scaleBySize(14),
 	},
+	[POPUP_STYLE_KINDLE] = {
+		-- Roomier top padding than Classic/Kobo: the reference screenshot
+		-- gives the headword its own clear band before the definition
+		-- starts, with no visible rule directly under it (the separator
+		-- between word and body is effectively invisible -- see
+		-- getPopupStyleHeaderCss below -- only the one above the source
+		-- citation at the very bottom is actually drawn).
+		panel_padding_top = Screen:scaleBySize(12),
+		panel_padding_bottom = Screen:scaleBySize(6),
+		text_button_gap = Screen:scaleBySize(8),
+		button_row_separator_width = math.max(1, Screen:scaleBySize(1.5)),
+		button_row_separator_gap = 0,
+		content_padding_left = Screen:scaleBySize(20),
+		content_padding_right = Screen:scaleBySize(18),
+		-- Full-bleed, screen-edge-docked panel (see the reference
+		-- screenshot): no side/bottom inset at all, unlike Classic/Kobo's
+		-- floating card. Combined with getPopupPositionMode() forcing
+		-- "screen_edge" for this style, and top_border_only below (a single
+		-- rule along the top edge instead of a border on all four sides),
+		-- this reads as a bottom-docked sheet spanning the full screen
+		-- width rather than a card floating near the selection.
+		card_outer_side_margin = 0,
+		card_outer_bottom_margin = 0,
+		-- Square corners, like the reference screenshot's card.
+		card_radius = 0,
+		-- Draw only a single rule along the very top edge instead of a
+		-- border on all four sides (see the FrameContainer construction in
+		-- FloatingDictionaryPopup:init, which reads this flag).
+		top_border_only = true,
+		breadcrumb_font_size = 14,
+		breadcrumb_gap = Screen:scaleBySize(4),
+		breadcrumb_bottom_margin = Screen:scaleBySize(2),
+		breadcrumb_separator_color = Blitbuffer.COLOR_LIGHT_GRAY,
+		body_separator_color = Blitbuffer.COLOR_LIGHT_GRAY,
+		-- Footer buttons kept exactly as configured by the user (icons,
+		-- order, external-plugin buttons, ...); the reference image's own
+		-- footer is a fixed tab bar with no equivalent in this plugin's
+		-- button system, so this style only changes typography/ordering,
+		-- never the footer's behavior. Classic's stretch-to-fill layout
+		-- reads closest to the reference's flush-left/flush-right feel.
+		button_layout_mode = "justify",
+	},
 }
 
 local function getPopupStyleLayout(style_id)
@@ -1142,6 +1162,79 @@ local function getPopupStyleHeaderCss(style_id)
     color: black;
     font-style: italic;
     letter-spacing: 0.01em;
+}
+]]
+	end
+
+	if style_id == POPUP_STYLE_KINDLE then
+		return [[
+.floatingdictionary-word {
+    /* Same size as the definition body -- not enlarged -- matching the
+       reference screenshot, where the bold headword reads at the same
+       "porte" (size) as the rest of the entry. */
+    font-size: 1em;
+    font-weight: bold;
+    line-height: 1.3;
+}
+.floatingdictionary-word-pron {
+    /* The phonetic pronunciation (e.g. "/ˌəndərˈgō/"), pulled out of the
+       dictionary's own entry (see extractLeadingPronunciation) and placed
+       right after the headword, on the same line, exactly like the
+       reference screenshot -- normal weight, not italic, slightly muted. */
+    font-weight: normal;
+    font-style: normal;
+    font-size: 0.85em;
+    color: #444;
+    margin-left: 0.5em;
+}
+.floatingdictionary-word-counter {
+    font-size: 0.6em;
+    font-weight: normal;
+    font-style: normal;
+    color: #666;
+    margin-left: 0.2em;
+}
+/* No visible rule between the headword and the definition body, matching
+   the reference screenshot (the only rule Kindle draws sits above the
+   source citation at the very bottom -- see .floatingdictionary-meta). */
+.floatingdictionary-separator {
+    border-top: none;
+    margin: 0.2em 0 0.3em 0;
+}
+/* Dictionary-source citation, pushed to the very end of the card (same
+   word/definition/meta ordering as Kobo -- see buildPreviewPayload), styled
+   as a small plain byline with a hairline rule above it, flush left, the
+   way the reference screenshot cites "Oxford Dictionary of English" under
+   the definition -- no italics, no underline. */
+.floatingdictionary-meta {
+    margin-top: 0.8em;
+    padding-top: 0.5em;
+    border-top: 1px solid #ccc;
+    font-size: 0.72em;
+    font-style: normal;
+    text-decoration: none;
+    color: #333;
+}
+/* Definition body: part-of-speech labels (adj./n./v., already marked up by
+   most dictionaries as <b> or <i>) read as bold italic; ordinary body text
+   is italic throughout, and nested sub-senses get a small indent -- the
+   overall serif/italic "print dictionary" feel of the reference image. */
+.floatingdictionary-body, .floatingdictionary-body p, .floatingdictionary-body li {
+    font-style: italic;
+}
+.floatingdictionary-body b, .floatingdictionary-body strong {
+    font-style: italic;
+}
+.floatingdictionary-body ol, .floatingdictionary-body ul {
+    margin: 0.2em 0 0.2em 1.1em;
+    padding: 0;
+}
+.floatingdictionary-body li {
+    margin-bottom: 0.35em;
+}
+.floatingdictionary-body li li {
+    margin-left: 0.6em;
+    font-size: 0.95em;
 }
 ]]
 	end
@@ -1217,55 +1310,31 @@ for _, action in ipairs(ACTIONS) do
 end
 
 -- Actions selectable for the small "Highlight / Add Note" style selection
--- menu (FloatingActionMenu, see below). Deliberately a separate, smaller
--- registry from ACTIONS/ACTION_BY_ID above: those drive the full-width
--- dictionary card's footer (icons, nav arrows, external-plugin buttons,
--- unlimited count); this one only ever needs a handful of native KOReader
--- actions, always shown as plain text, capped at SMALL_MENU_MAX_BUTTONS.
-local SMALL_MENU_ACTION_HIGHLIGHT = "sm_highlight"
+-- menu (FloatingActionMenu, see below). This is NOT a full duplicate of
+-- ACTIONS/ACTION_BY_ID anymore: the small menu's candidate list
+-- (getSmallMenuCandidateActions) is built from THREE sources --
+--   1. The text buttons from ACTIONS (no `kind`), reusing the exact same
+--      ids (ACTION_HIGHLIGHT, ACTION_WIKIPEDIA, ...) and the exact same
+--      "Buttons shown in preview" visibility (isActionVisible) as the
+--      footer, so there is only one place that decides whether e.g.
+--      Translate is enabled at all -- not two drifting copies of it.
+--   2. External buttons from other plugins ("Other plugins" /
+--      getExternalActions), same "ext:" ids and same visibility rules as
+--      the footer.
+--   3. This SMALL_MENU_ACTIONS registry, which now only holds actions with
+--      NO footer/preview equivalent: Add Note. This is the small menu's own
+--      additional logic.
+-- See runSmallMenuAction below for the matching dispatch of all three kinds.
 local SMALL_MENU_ACTION_ADD_NOTE = "sm_add_note"
-local SMALL_MENU_ACTION_WORD_REVIEW = "sm_word_review"
-local SMALL_MENU_ACTION_WIKIPEDIA = "sm_wikipedia"
-local SMALL_MENU_ACTION_TRANSLATE = "sm_translate"
-local SMALL_MENU_ACTION_SEARCH_BOOK = "sm_search_book"
--- Puts the current selection into KOReader's own native "select mode" --
--- the exact same mechanism as the "Select"/"Extend" button in KOReader's
--- built-in highlight dialog (ReaderHighlight:startSelection, see
--- startSelectMode below) -- so the user can then hold-pan from either end
--- to grow the selection across paragraphs/pages before finishing with a
--- normal hold-release. Addresses the "trigger select mode" request
--- (github issue #14): makes it easy to highlight long chunks of text
--- without being limited to a single hold-drag gesture.
-local SMALL_MENU_ACTION_SELECT_MODE = "sm_select_mode"
--- Re-enters select mode anchored on the most recently created highlight
--- (tracked in FloatingDictionary.last_highlight_index, see
--- extendLastHighlight below), so a *new* nearby selection can grow that
--- existing highlight instead of becoming a separate one. Also addresses
--- issue #14 ("pull from the end of a set highlight ... extend the
--- previous highlight automatically") -- done via KOReader's own
--- select-mode machinery (one extra tap) rather than merging highlight
--- boxes/text by hand, which isn't something that can be verified without
--- testing on an actual device.
-local SMALL_MENU_ACTION_EXTEND_LAST = "sm_extend_last"
-
+-- "label" is the descriptive text shown in the settings menu (where
+-- there's room to be clear); "short_label" is what actually renders on
+-- the small selection-menu button itself, kept deliberately short so it
+-- never gets clipped even at a modest card width. Highlight/Wikipedia/
+-- Translate/Search/Save-for-review are NOT listed here anymore -- they
+-- come from ACTIONS via getSmallMenuCandidateActions instead, see the
+-- comment above this registry.
 local SMALL_MENU_ACTIONS = {
-	-- "label" is the descriptive text shown in the settings menu (where
-	-- there's room to be clear); "short_label" is what actually renders on
-	-- the small selection-menu button itself, kept deliberately short so it
-	-- never gets clipped even at a modest card width.
-	{ id = SMALL_MENU_ACTION_HIGHLIGHT, label = _("Highlight"), short_label = _("Highlight") },
 	{ id = SMALL_MENU_ACTION_ADD_NOTE, label = _("Add Note"), short_label = _("Note") },
-	-- Short, but explicit that this saves the word for later review (see
-	-- addSelectionToWordReview / the "Word review" feature below). This is
-	-- now the ONLY save action: saving here also transparently mirrors the
-	-- word into the Vocabulary Builder plugin when that plugin is present,
-	-- so there is no separate "Add to vocabulary builder" button anymore.
-	{ id = SMALL_MENU_ACTION_WORD_REVIEW, label = _("Save for review"), short_label = _("Save") },
-	{ id = SMALL_MENU_ACTION_WIKIPEDIA, label = _("Wikipedia"), short_label = _("Wikipedia") },
-	{ id = SMALL_MENU_ACTION_TRANSLATE, label = _("Translate"), short_label = _("Translate") },
-	{ id = SMALL_MENU_ACTION_SEARCH_BOOK, label = _("Fulltext search"), short_label = _("Search") },
-	{ id = SMALL_MENU_ACTION_SELECT_MODE, label = _("Select mode (extend selection)"), short_label = _("Select") },
-	{ id = SMALL_MENU_ACTION_EXTEND_LAST, label = _("Extend last highlight"), short_label = _("Extend") },
 }
 
 local SMALL_MENU_ACTION_BY_ID = {}
@@ -1285,14 +1354,19 @@ local WORD_REVIEW_CONTEXT_MAX_CHARS = 300
 -- decides where the returned context actually starts/ends.
 local WORD_REVIEW_CONTEXT_SEARCH_WORDS = 40
 
--- The small menu can show at most 3 buttons at once (see docs/feature
--- request #6); if the user enables more than that in settings, they must
--- also choose which 3 (and in what order) actually show.
-local SMALL_MENU_MAX_BUTTONS = 3
+-- The small menu can show at most 5 buttons at once; if the user enables
+-- more than that in settings, they must also choose which 5 (and in what
+-- order) actually show. Enforced strictly both in the settings menu (the
+-- UI refuses to enable a 6th) and again when the Small Menu itself is
+-- rendered (see showFloatingActionMenuForSelection).
+local SMALL_MENU_MAX_BUTTONS = 5
+-- Default ids reuse the real ACTIONS ids (ACTION_HIGHLIGHT, ACTION_VOCABULARY,
+-- ...), exactly like every other small-menu candidate coming from ACTIONS --
+-- see the comment above SMALL_MENU_ACTIONS.
 local SMALL_MENU_DEFAULT_BUTTONS = {
-	SMALL_MENU_ACTION_HIGHLIGHT,
+	ACTION_HIGHLIGHT,
 	SMALL_MENU_ACTION_ADD_NOTE,
-	SMALL_MENU_ACTION_WORD_REVIEW,
+	ACTION_VOCABULARY,
 }
 
 -- Text-fallback footer buttons (used when no icon file is available) show
@@ -1646,6 +1720,19 @@ local function normalizeFloatingDictionaryHtml(definition)
 	return normalizeDictionaryLists(html)
 end
 
+-- Kindle style only: the reference screenshot shows the phonetic
+-- pronunciation ("/ˌəndərˈgō/") on the very same line as the bold headword,
+-- e.g. "undergo /ˌəndərˈgō/". Many StarDict entries already carry that
+-- pronunciation themselves, as a <span class="pron">...</span> (or similar)
+-- right at the start of the entry, immediately after the headword. The
+-- actual extraction helper (extractLeadingPronunciation, which pulls the
+-- first such span out of the body so it isn't shown twice, and returns its
+-- plain text) is declared as a *nested* local inside
+-- FloatingDictionary:buildPreviewPayload below, the one place that needs
+-- it, rather than as its own top-level local here: this file's main chunk
+-- is already right at LuaJIT's 200-local-per-function ceiling, and nested
+-- locals don't count against that budget.
+
 -- CSS ------------------------------------------------------------------------
 
 -- Mirrors the approach used by xray_ui.lua: prefer the font family of the
@@ -1855,11 +1942,17 @@ local PreviewButton = InputContainer:extend({
 	-- 80px slot width below. Used by the Kobo footer's compact, naturally-
 	-- sized, left-packed buttons.
 	auto_width = false,
+	-- When true, a text label is NEVER truncated with "...": if the label is
+	-- wider than the slot it was given (width), the button simply grows to
+	-- fit the whole text instead of clipping it.
+	no_truncate = false,
 	height = Screen:scaleBySize(48),
 	icon_width = KOREADER_ICON_SIZE,
 	icon_height = KOREADER_ICON_SIZE,
 	align = "center", -- "center" (default, used for footer icons) or "left" (text rows)
 	bold = true, -- text-label buttons are bold by default; pass false for a plain-weight label
+	fgcolor = nil, -- optional explicit text color for a text-fallback label (e.g. the Kindle
+	              -- style's inactive tabs); falls back to the disabled/normal default below
 	callback = nil,
 	show_parent = nil,
 })
@@ -1871,7 +1964,16 @@ function PreviewButton:init()
 	local padding_h = Size.padding.button
 	local padding_v = Size.padding.button
 	local auto_width = self.width == nil and self.auto_width
-	local outer_w = self.width or (auto_width and nil) or Screen:scaleBySize(80)
+	-- With auto_width there is deliberately NO outer width yet: the label's
+	-- own natural size decides it below. (The previous expression
+	-- `self.width or (auto_width and nil) or 80px` always evaluated to the
+	-- fixed 80px fallback when auto_width was true, because `x and nil` is
+	-- always nil -- which capped the label's max_width at ~80px and is the
+	-- real cause of custom Button Text showing up as "Tradu...".)
+	local outer_w
+	if not auto_width then
+		outer_w = self.width or Screen:scaleBySize(80)
+	end
 	local outer_h = self.height or Screen:scaleBySize(48)
 	-- With an explicit/fallback width, size the label to fit inside it as
 	-- before. With auto_width, there's no outer_w yet -- the label's own
@@ -1905,9 +2007,20 @@ function PreviewButton:init()
 			text = self.text or "",
 			face = self.face or Font:getFace("cfont", UI_FONT_SIZE),
 			bold = self.bold,
-			max_width = inner_w,
-			fgcolor = self.disabled and Blitbuffer.COLOR_LIGHT_GRAY or nil,
+			max_width = (not self.no_truncate) and inner_w or nil,
+			fgcolor = self.fgcolor or (self.disabled and Blitbuffer.COLOR_LIGHT_GRAY or nil),
 		})
+	end
+
+	-- no_truncate: the label was built without any max_width, so if it turns
+	-- out wider than the slot, grow the slot to the label instead of ever
+	-- clipping the end of the text.
+	if self.no_truncate and is_text_label and not auto_width and inner_w then
+		local natural = label:getSize()
+		if natural and natural.w and natural.w > inner_w then
+			inner_w = natural.w
+			outer_w = inner_w + 2 * bordersize + 2 * padding_h
+		end
 	end
 
 	if auto_width then
@@ -1983,6 +2096,8 @@ local BreadcrumbWord = InputContainer:extend({
 	text = nil,
 	face = nil,
 	bold = false,
+	fgcolor = nil, -- optional explicit text color; used by the Kindle style's tab
+	              -- row (see makeKindleTabsRow) to gray out the inactive tabs
 	callback = nil,
 })
 
@@ -1991,6 +2106,7 @@ function BreadcrumbWord:init()
 		text = self.text or "",
 		face = self.face,
 		bold = self.bold,
+		fgcolor = self.fgcolor,
 	})
 	self.label_widget = label
 	self.dimen = label:getSize()
@@ -2077,6 +2193,16 @@ local FloatingDictionaryPopup = InputContainer:extend({
 	custom_title = nil, -- string; when set, replaces the breadcrumb strip with a
 	                    -- plain left-aligned title (used by the word-review
 	                    -- popup instead of the cascade breadcrumb/navigation).
+	kindle_tabs = nil, -- Kindle style only: ordered list of
+	                   -- { label = string, active = boolean, callback = function|nil }
+	                   -- rendered as a full-width row of text tabs ("Dictionary
+	                   -- / Wikipedia / Translate / Search", matching the
+	                   -- reference screenshot) in place of the cascade
+	                   -- breadcrumb strip. Built by showResult (see
+	                   -- FloatingDictionary:showDict) only when the active
+	                   -- style is Kindle; nil under every other style, or
+	                   -- whenever a real cascade trail (2+ deep) needs to be
+	                   -- shown instead, so back-navigation isn't lost.
 	style_id = nil, -- popup presentation style id (POPUP_STYLE_CLASSIC/
 	                -- POPUP_STYLE_KOBO/...), as chosen by the user in the
 	                -- settings menu; falls back to POPUP_STYLE_DEFAULT. Only
@@ -2157,26 +2283,60 @@ function FloatingDictionaryPopup:init()
 	-- renders a plain left-aligned label instead of the tappable cascade
 	-- trail, and is never combined with an actual breadcrumb (a review card
 	-- never has cascade history of its own).
+	--
+	-- Kindle's own tab row (self.kindle_tabs, see the field comment above)
+	-- reuses this exact same slot too, and only when there's no real
+	-- cascade trail to show instead -- a genuine 2+-deep breadcrumb (the
+	-- user tapped a cross-reference link) still takes priority, so
+	-- back-navigation through the chain is never lost under Kindle style.
 	local breadcrumb = not self.custom_title and self:makeBreadcrumb(content_width) or nil
 	local title_widget = self.custom_title and TextWidget:new({
 		text = self.custom_title,
 		face = Font:getFace("cfont", layout.breadcrumb_font_size),
 		bold = true,
 	}) or nil
+	local kindle_tabs_widget
+	if not self.custom_title and type(self.kindle_tabs) == "table" and #self.kindle_tabs > 0 then
+		kindle_tabs_widget = self:makeKindleTabsRow(content_width)
+	end
 	local breadcrumb_rows = {}
 	local breadcrumb_extra_height = 0
+	local top_widgets = {}
+	-- The cascade breadcrumb (or custom title) sits on top; Kindle's button
+	-- row (Dictionary | buttons...) always stays, right under the breadcrumb
+	-- when there is one, so navigating through links never drops the buttons.
 	if breadcrumb or title_widget then
-		local top_widget = breadcrumb or title_widget
-		local top_height = self:getWidgetHeight(top_widget, Screen:scaleBySize(layout.breadcrumb_font_size + 6))
-		table.insert(breadcrumb_rows, HorizontalGroup:new({
-			HorizontalSpan:new({ width = layout.content_padding_left }),
-			top_widget,
-			HorizontalSpan:new({ width = layout.content_padding_right }),
-		}))
+		table.insert(top_widgets, breadcrumb or title_widget)
+	end
+	if kindle_tabs_widget then
+		table.insert(top_widgets, kindle_tabs_widget)
+	end
+	if #top_widgets > 0 then
+		local top_height = 0
+		local row_gap = Screen:scaleBySize(6)
+		for top_index, top_widget in ipairs(top_widgets) do
+			local widget_height = self:getWidgetHeight(top_widget, Screen:scaleBySize(layout.breadcrumb_font_size + 6))
+			-- Pad each row out to the exact same total width as the other rows
+			-- in the card (html body, separator, buttons) with a trailing
+			-- filler span, so it stays flush left instead of being re-centered.
+			local top_widget_width = (top_widget:getSize() and top_widget:getSize().w) or 0
+			local top_filler = math.max(0, content_width - top_widget_width)
+			if top_index > 1 then
+				table.insert(breadcrumb_rows, VerticalSpan:new({ width = row_gap }))
+				top_height = top_height + row_gap
+			end
+			table.insert(breadcrumb_rows, HorizontalGroup:new({
+				HorizontalSpan:new({ width = layout.content_padding_left }),
+				top_widget,
+				HorizontalSpan:new({ width = top_filler }),
+				HorizontalSpan:new({ width = layout.content_padding_right }),
+			}))
+			top_height = top_height + widget_height
+		end
 		table.insert(breadcrumb_rows, VerticalSpan:new({ width = layout.breadcrumb_gap }))
 		table.insert(breadcrumb_rows, LineWidget:new({
 			background = layout.breadcrumb_separator_color,
-			dimen = Geom:new({ w = self.width - 2 * (self.border_thickness or POPUP_BORDER_THICKNESS_DEFAULT), h = layout.button_row_separator_width }),
+			dimen = Geom:new({ w = layout.top_border_only and self.width or (self.width - 2 * (self.border_thickness or POPUP_BORDER_THICKNESS_DEFAULT)), h = layout.button_row_separator_width }),
 		}))
 		table.insert(breadcrumb_rows, VerticalSpan:new({ width = layout.breadcrumb_bottom_margin }))
 		breadcrumb_extra_height = top_height + layout.breadcrumb_gap + layout.button_row_separator_width + layout.breadcrumb_bottom_margin
@@ -2184,10 +2344,35 @@ function FloatingDictionaryPopup:init()
 
 	local border_thickness = self.border_thickness or POPUP_BORDER_THICKNESS_DEFAULT
 	local border_color = self.border_color or Blitbuffer.Color8(math.floor((1 - POPUP_BORDER_DARKNESS_DEFAULT) * 255 + 0.5))
+	-- top_border_only (Kindle): only the top edge gets a border-thickness
+	-- worth of extra height (a single rule); Classic/Kobo reserve
+	-- border_thickness on both the top and bottom edge, since their
+	-- FrameContainer draws a real border on all four sides.
+	local border_height_allowance = layout.top_border_only and border_thickness or (2 * border_thickness)
+	-- Kindle with the card docked at the TOP of the screen: its top rule
+	-- would sit at the screen edge and is useless, so that same black rule
+	-- (same color/thickness/renderer as the one shown when the card is at
+	-- the bottom) is used as the separator under the dictionary name instead
+	-- of the gray hairline. The card never shows both at once.
+	local kindle_top_docked = (layout.top_border_only and self.anchor_top) and true or false
+	local body_sep_h = layout.button_row_separator_width
+	local body_sep_color = layout.body_separator_color
+	local kindle_end_line_h = 0
+	if layout.top_border_only then
+		-- Kindle: the gray hairline above the footer is not drawn at all
+		-- (it showed up as an unwanted gray line at the screen's bottom).
+		body_sep_h = 0
+	end
+	if kindle_top_docked then
+		-- Card at the top: one clean black line as the very last row of the
+		-- card, so nothing white sits below it -- just the book page.
+		border_height_allowance = 0
+		kindle_end_line_h = math.max(1, border_thickness)
+	end
 
 	local fixed_height = layout.panel_padding_top + breadcrumb_extra_height + layout.text_button_gap
-		+ layout.button_row_separator_width + layout.button_row_separator_gap + buttons_height
-		+ layout.panel_padding_bottom + 2 * border_thickness
+		+ body_sep_h + layout.button_row_separator_gap + buttons_height
+		+ layout.panel_padding_bottom + border_height_allowance + kindle_end_line_h
 	local min_html_height = Screen:scaleBySize(40)
 	local max_html_height = math.max(max_popup_height - fixed_height, min_html_height)
 
@@ -2221,6 +2406,20 @@ function FloatingDictionaryPopup:init()
 	self.height = fixed_height + html_height
 
 	local body_rows = {}
+	-- top_border_only (Kindle style): a single rule along the very top
+	-- edge instead of a border on all four sides -- see the layout comment
+	-- above. The FrameContainer itself gets bordersize 0 below, so this is
+	-- the *only* border drawn.
+	local frame_bordersize = border_thickness
+	if layout.top_border_only then
+		frame_bordersize = 0
+	end
+	if layout.top_border_only and not kindle_top_docked then
+		table.insert(body_rows, LineWidget:new({
+			background = border_color,
+			dimen = Geom:new({ w = self.width, h = math.max(1, border_thickness) }),
+		}))
+	end
 	table.insert(body_rows, VerticalSpan:new({ width = layout.panel_padding_top }))
 	for _, row in ipairs(breadcrumb_rows) do
 		table.insert(body_rows, row)
@@ -2231,17 +2430,25 @@ function FloatingDictionaryPopup:init()
 		HorizontalSpan:new({ width = layout.content_padding_right }),
 	}))
 	table.insert(body_rows, VerticalSpan:new({ width = layout.text_button_gap }))
-	table.insert(body_rows, LineWidget:new({
-		background = layout.body_separator_color,
-		dimen = Geom:new({ w = self.width - 2 * border_thickness, h = layout.button_row_separator_width }),
-	}))
+	if body_sep_h > 0 then
+		table.insert(body_rows, LineWidget:new({
+			background = body_sep_color,
+			dimen = Geom:new({ w = layout.top_border_only and self.width or (self.width - 2 * border_thickness), h = body_sep_h }),
+		}))
+	end
 	table.insert(body_rows, VerticalSpan:new({ width = layout.button_row_separator_gap }))
 	table.insert(body_rows, buttons)
 	table.insert(body_rows, VerticalSpan:new({ width = layout.panel_padding_bottom }))
+	if kindle_end_line_h > 0 then
+		table.insert(body_rows, LineWidget:new({
+			background = border_color,
+			dimen = Geom:new({ w = self.width, h = kindle_end_line_h }),
+		}))
+	end
 
 	self.container = FrameContainer:new({
 		background = Blitbuffer.COLOR_WHITE,
-		bordersize = border_thickness,
+		bordersize = frame_bordersize,
 		color = border_color,
 		radius = layout.card_radius,
 		margin = 0,
@@ -2407,6 +2614,129 @@ function FloatingDictionaryPopup:makeBreadcrumb(width)
 	return HorizontalGroup:new(widgets)
 end
 
+-- Kindle style only: renders self.kindle_tabs (see the field comment above)
+-- as a left-packed row of plain text tabs, one after another (never
+-- stretched to fill the row like the footer's "justify" buttons), matching
+-- the reference screenshot's "Dictionary  Wikipedia  Translate  Search"
+-- line. "Dictionary" is always first; every other entry is a button the
+-- user configured (text buttons AND buttons from other plugins), in exactly
+-- the order the user set. Reuses BreadcrumbWord (a bare tappable label, no
+-- border/background/padding of its own) instead of PreviewButton
+-- specifically so the first tab's text lines up exactly flush with the
+-- definition body's own left margin. The active tab (always "Dictionary")
+-- is bold/black, carries a relatively thick bar underneath it, and is not
+-- tappable; the others are plain-weight, gray, sit flush with the active
+-- tab's baseline, and each tap directly runs that action.
+--
+-- Labels are NEVER truncated: every tab is exactly as wide as its own full
+-- text (there is no max_width / ellipsis anywhere in this row). If the whole
+-- row would be wider than the popup, the gap between tabs shrinks first and,
+-- only if that still isn't enough, the font size is reduced a step at a time
+-- until every full label fits on the one row.
+function FloatingDictionaryPopup:makeKindleTabsRow(width)
+	local tabs = self.kindle_tabs
+	if type(tabs) ~= "table" or #tabs == 0 then
+		return HorizontalGroup:new({})
+	end
+
+	local layout = self._layout or getPopupStyleLayout(self.style_id)
+	local base_font_size = layout.breadcrumb_font_size + 2
+	local min_font_size = math.max(8, base_font_size - 8)
+	local base_gap = Screen:scaleBySize(20)
+	local min_gap = Screen:scaleBySize(8)
+	local bar_thickness = Screen:scaleBySize(3)
+	local bar_gap = Screen:scaleBySize(3)
+	local gap_count = #tabs - 1
+
+	-- Total width of all the (full, untruncated) labels at a given font size.
+	local function measureLabels(font_size)
+		local face = Font:getFace("cfont", font_size)
+		local total = 0
+		for _, tab in ipairs(tabs) do
+			local probe = TextWidget:new({
+				text = tab.label or "",
+				face = face,
+				bold = tab.active and true or false,
+			})
+			local size = probe:getSize()
+			total = total + (size and size.w or 0)
+			probe:free()
+		end
+		return face, total
+	end
+
+	local function computeGap(labels_total)
+		if gap_count <= 0 then
+			return 0
+		end
+		local free = math.floor((width - labels_total) / gap_count)
+		return math.max(min_gap, math.min(base_gap, free))
+	end
+
+	local font_size = base_font_size
+	local face, labels_total = measureLabels(font_size)
+	local gap = computeGap(labels_total)
+	while font_size > min_font_size and labels_total + gap * gap_count > width do
+		font_size = font_size - 1
+		face, labels_total = measureLabels(font_size)
+		gap = computeGap(labels_total)
+	end
+
+	local widgets = {}
+	for index, tab in ipairs(tabs) do
+		if index > 1 then
+			table.insert(widgets, HorizontalSpan:new({ width = gap }))
+		end
+
+		local label = BreadcrumbWord:new({
+			text = tab.label,
+			face = face,
+			bold = tab.active and true or false,
+			-- Explicit pure black for the active tab (rather than leaving
+			-- fgcolor nil) so it never reads as a lighter default/gray on
+			-- devices where "unset" isn't quite black.
+			fgcolor = tab.active and Blitbuffer.COLOR_BLACK or Blitbuffer.COLOR_GRAY,
+			callback = tab.callback,
+		})
+		local label_width = label:getSize() and label:getSize().w or 0
+
+		-- Underline indicator: a solid bar under the active tab only, the
+		-- same width as its label. Inactive tabs get an invisible spacer of
+		-- identical height so every tab's label still lines up on the same
+		-- baseline regardless of which one is active.
+		local indicator
+		if tab.active then
+			indicator = LineWidget:new({
+				background = Blitbuffer.COLOR_BLACK,
+				dimen = Geom:new({ w = label_width, h = bar_thickness }),
+			})
+		else
+			indicator = VerticalSpan:new({ width = bar_thickness })
+		end
+
+		table.insert(widgets, VerticalGroup:new({
+			align = "left",
+			label,
+			VerticalSpan:new({ width = bar_gap }),
+			indicator,
+		}))
+	end
+
+	return HorizontalGroup:new(widgets)
+end
+
+-- Builds the footer row of buttons.
+--
+-- IMPORTANT (issue: custom Button Text getting truncated like "Traduc..."):
+-- in the "justify" layout mode (Classic/Kindle) each button now measures
+-- the natural width its own label needs -- using the exact same face/bold
+-- settings the button will render with -- and only then distributes any
+-- leftover horizontal space evenly between the buttons. When the sum of
+-- the natural widths already exceeds the available row width, the buttons
+-- are shrunk proportionally but never below their own measured minimum, so
+-- a fully visible (non-truncated) label is the preferred outcome in every
+-- case. TextWidget's own max_width/ellipsis path is only ever hit as a last
+-- resort when the sum genuinely cannot fit even at minimum size.
 function FloatingDictionaryPopup:makeButtons(width)
 	local layout = self._layout or getPopupStyleLayout(self.style_id)
 	local button_height = self.button_row_height or BUTTON_HEIGHT
@@ -2432,8 +2762,8 @@ function FloatingDictionaryPopup:makeButtons(width)
 
 	local button_count = #button_specs
 	if button_count == 0 then
-		-- No footer actions to show at all (e.g. Minimalist display mode):
-		-- render an empty, zero-height row instead of dividing by zero below.
+		-- No footer actions to show at all: render an empty, zero-height
+		-- row instead of dividing by zero below.
 		return HorizontalGroup:new({})
 	end
 
@@ -2455,6 +2785,7 @@ function FloatingDictionaryPopup:makeButtons(width)
 				disabled = spec.disabled,
 				width = nil,
 				auto_width = true, -- natural width, not stretched to fill a slot
+				no_truncate = true,
 				height = compact_height,
 				icon_width = compact_icon_size,
 				icon_height = compact_icon_size,
@@ -2491,12 +2822,68 @@ function FloatingDictionaryPopup:makeButtons(width)
 		})
 	end
 
+	-- "justify" layout mode (Classic/Kindle): the row fills the full width.
+	-- Each button's *minimum* width is measured from its own label / icon
+	-- first so a long custom Button Text ("Traducir palabra", ...) still
+	-- gets a slot wide enough to render it whole whenever the row can
+	-- afford it, and never gets ellipsised while there's still slack to
+	-- distribute. Only when the row genuinely can't fit everything at
+	-- minimum size do we compress; in that (rare) case TextWidget still
+	-- truncates as a last resort.
 	local separator_count = math.max(0, button_count - 1)
 	local available_button_width = math.max(1, width - separator_width * separator_count)
-	local button_width = math.floor(available_button_width / button_count)
-	local remainder = available_button_width - (button_width * button_count)
 
-	local function makeButton(spec, callback, extra_width)
+	local text_probe_face = self.button_face or Font:getFace("cfont", UI_FONT_SIZE)
+	local min_widths = {}
+	local total_min = 0
+	for index, item in ipairs(button_specs) do
+		local spec = item.spec or {}
+		local min_w
+		if spec.icon_file or spec.icon then
+			min_w = icon_size + 2 * Size.padding.button
+		else
+			local probe = TextWidget:new({
+				text = spec.text or "",
+				face = text_probe_face,
+				bold = true,
+			})
+			local sz = probe:getSize()
+			probe:free()
+			min_w = (sz and sz.w or 0) + 2 * Size.padding.button + Screen:scaleBySize(4)
+		end
+		min_widths[index] = min_w
+		total_min = total_min + min_w
+	end
+
+	local use_min_widths = total_min <= available_button_width
+	local per_button_extra, extra_remainder, fallback_button_width, fallback_remainder
+	if use_min_widths then
+		local extra = available_button_width - total_min
+		per_button_extra = math.floor(extra / button_count)
+		extra_remainder = extra - per_button_extra * button_count
+	else
+		-- Ni siquiera cabe el texto mínimo: reparto proporcional al ancho
+		-- disponible, nunca por debajo del mínimo calculado para cada
+		-- botón (así el texto personalizado nunca queda cortado "de
+		-- gratis", y en el peor caso el widget aún tiene margen para
+		-- mostrar el texto completo).
+		fallback_button_width = math.floor(available_button_width / button_count)
+		fallback_remainder = available_button_width - (fallback_button_width * button_count)
+	end
+
+	local function getButtonWidth(index)
+		if use_min_widths then
+			local w = min_widths[index] + per_button_extra
+			if index <= extra_remainder then
+				w = w + 1
+			end
+			return w
+		end
+		local w = fallback_button_width + (index <= fallback_remainder and 1 or 0)
+		return math.max(w, min_widths[index] or 0)
+	end
+
+	local function makeButton(spec, callback, index)
 		spec = spec or {}
 		return PreviewButton:new({
 			text = spec.text,
@@ -2504,7 +2891,8 @@ function FloatingDictionaryPopup:makeButtons(width)
 			icon_file = spec.icon_file,
 			face = self.button_face,
 			disabled = spec.disabled,
-			width = button_width + (extra_width or 0),
+			width = getButtonWidth(index),
+			no_truncate = true,
 			height = button_height,
 			icon_width = icon_size,
 			icon_height = icon_size,
@@ -2528,12 +2916,7 @@ function FloatingDictionaryPopup:makeButtons(width)
 		if index > 1 then
 			table.insert(widgets, makeSeparator())
 		end
-
-		table.insert(widgets, makeButton(
-			item.spec,
-			item.callback,
-			index <= remainder and 1 or 0
-		))
+		table.insert(widgets, makeButton(item.spec, item.callback, index))
 	end
 
 	return HorizontalGroup:new(widgets)
@@ -2567,13 +2950,6 @@ end
 -- the box we built it with and would need to scroll. That nil case is
 -- exactly the signal we want too: "don't shrink, this content needs the
 -- full ceiling (or more, via scrolling)".
---
--- (Earlier versions of this function tried to read internal fields such as
--- `_h_content`, `content_height`, or `htmlbox_widget:getSize()`. None of
--- those exist on ScrollHtmlWidget/HtmlBoxWidget, so that code always fell
--- through to nil and the popup always fell back to the much rougher
--- plain-text estimateHtmlContentHeight() below -- which is the bug this
--- fixes.)
 --
 -- Every access is still pcall-guarded and falls back to returning nil
 -- (meaning "unknown, use the estimator or the ceiling instead") on any
@@ -2718,9 +3094,30 @@ function FloatingDictionaryPopup:onClosePreview()
 end
 
 function FloatingDictionaryPopup:onActionButton(action_index)
-	UIManager:close(self)
 	local entry = self.actions and self.actions[action_index]
-	if entry and entry.callback then
+	if not entry then
+		return true
+	end
+
+	if entry.needs_network then
+		-- Wikipedia/Translate: don't close this card yet -- wait for
+		-- NetworkMgr:runWhenOnline to confirm we're actually online (it
+		-- shows the "connect to wifi?" prompt itself when needed). If the
+		-- user declines, this callback is simply never invoked and the card
+		-- is left open exactly as it was, instead of closing while leaving
+		-- the selected word with no dictionary popup to show for it.
+		local NetworkMgr = require("ui/network/manager")
+		NetworkMgr:runWhenOnline(function()
+			UIManager:close(self)
+			if entry.callback then
+				entry.callback()
+			end
+		end)
+		return true
+	end
+
+	UIManager:close(self)
+	if entry.callback then
 		return entry.callback()
 	end
 	return true
@@ -2857,7 +3254,7 @@ end
 -- independently tappable chips (reusing PreviewButton): a wide label chip
 -- that toggles visibility, plus a ↑ and/or ↓ chip that reorders the button.
 -- Only the arrow(s) that would actually do something are shown, so the first
--- button in the list only gets ↓, the last one only gets ↑, and everything
+-- button in the list only gets ↓, the last one only ↑, and everything
 -- in between gets both.
 
 local FloatingDictionaryButtonSettingsPopup = InputContainer:extend({
@@ -2974,7 +3371,7 @@ local FloatingActionMenu = InputContainer:extend({
 	actions = nil, -- ordered list of { text = "...", callback = function() ... end }
 	anchor_top = false, -- true floats above the selection; false (default) floats below it
 	boxes = nil, -- selection boxes (screen-space, same shape showDict/onLookupWord receive), used to hug the card to the actual selection instead of a screen edge
-	popup_position_mode = nil, -- "near_word" (default) or "screen_edge" -- see the matching field on FloatingDictionaryPopup above; kept in sync so both cards use the same positioning mode
+	popup_position_mode = nil, -- "near_word" (default) or "screen_edge" -- see the matching field on FloatingDictionaryPopup above; accepted for compatibility but NOT used by this menu: it always hugs the selection, even in "screen_edge" mode (only the dictionary card goes to the edge)
 	close_callback = nil,
 	plugin = nil, -- the owning FloatingDictionary instance; used to (a) read the dictionary's own font, and (b) find the dictionary card's current dimen so taps over it aren't swallowed and this menu never overlaps it unnecessarily
 	style_id = nil, -- popup presentation style id; see getPopupStyleLayout
@@ -3032,7 +3429,9 @@ function FloatingActionMenu:init()
 	-- minimum width -- a big min_row_width was exactly what left noticeable
 	-- empty space on either side of short labels like "Note" or "Save".
 	local min_row_width = Screen:scaleBySize(56)
-	local max_card_width = math.floor(screen_width * 0.62) -- never grows into a full-width bar
+	-- Only a screen-fit ceiling now (was 62% of the screen, which could clip a
+	-- long custom Button Text with "..."): a label is always shown in full.
+	local max_card_width = screen_width - 2 * layout.card_outer_side_margin
 
 	-- Same font (family + size) the dictionary card itself uses -- see
 	-- getDocFontFace, used identically by buildPreviewPayload for the
@@ -3092,6 +3491,7 @@ function FloatingActionMenu:init()
 			align = "center", -- centered label, like the native prompt's rows
 			bold = false,
 			width = row_width,
+			no_truncate = true,
 			height = row_height,
 			show_parent = self,
 			callback = action.callback,
@@ -3129,20 +3529,20 @@ function FloatingActionMenu:init()
 	-- boxes showDict/onLookupWord receive): lets the card hug the selection
 	-- itself -- just above or just below it -- instead of floating all the
 	-- way at the screen edge like the full-width dictionary card does.
-	-- Left nil (skipping the loop below) when popup_position_mode is
-	-- "screen_edge", so the branch further down falls through to the plain
-	-- edge-anchored placement instead, same as the dictionary card.
+	-- Always computed, regardless of popup_position_mode: the "screen_edge"
+	-- mode only applies to the big dictionary card. This small menu keeps
+	-- hugging the selection even then -- otherwise, with the dictionary
+	-- card flush against one edge, the menu was pushed to the *opposite*
+	-- screen edge, far away from the selected word (bug report).
 	local sel_left, sel_right, sel_top, sel_bottom
-	if self.popup_position_mode ~= POPUP_POSITION_SCREEN_EDGE then
-		for _, box in ipairs(self.boxes or {}) do
-			if type(box) == "table" and box.x and box.y and box.w and box.h then
-				local x0, x1 = box.x, box.x + box.w
-				local y0, y1 = box.y, box.y + box.h
-				sel_left = sel_left and math.min(sel_left, x0) or x0
-				sel_right = sel_right and math.max(sel_right, x1) or x1
-				sel_top = sel_top and math.min(sel_top, y0) or y0
-				sel_bottom = sel_bottom and math.max(sel_bottom, y1) or y1
-			end
+	for _, box in ipairs(self.boxes or {}) do
+		if type(box) == "table" and box.x and box.y and box.w and box.h then
+			local x0, x1 = box.x, box.x + box.w
+			local y0, y1 = box.y, box.y + box.h
+			sel_left = sel_left and math.min(sel_left, x0) or x0
+			sel_right = sel_right and math.max(sel_right, x1) or x1
+			sel_top = sel_top and math.min(sel_top, y0) or y0
+			sel_bottom = sel_bottom and math.max(sel_bottom, y1) or y1
 		end
 	end
 
@@ -3598,9 +3998,13 @@ end
 -- deeper.
 
 -- Appearance: everything about how the popup/card itself looks -- preview
--- language, fonts, colors/borders, card size, display mode/style, the
--- highlight styles it absorbed from KOReader's own Highlights menu, and
--- the card transition animation toggle.
+-- language, fonts, colors/borders, card size, popup style, the highlight
+-- styles it absorbed from KOReader's own Highlights menu, and the card
+-- transition animation toggle.
+-- NOTE: The old "Display mode" entry (Personal / Minimal / Full / Language
+-- learner) has been removed from this menu (and from the plugin entirely).
+-- Popup style now governs Kindle layout (Dictionary-first tab row) and
+-- visibility continues to be driven solely by "Buttons shown in preview".
 function FloatingDictionary:genAppearanceMenu()
 	return {
 		{
@@ -3627,19 +4031,6 @@ function FloatingDictionary:genAppearanceMenu()
 			end,
 			sub_item_table_func = function()
 				return self:genFontFamilyMenu()
-			end,
-		},
-		{
-			text_func = function()
-				for _idx, display_mode in ipairs(DISPLAY_MODES) do
-					if display_mode.id == self:getDisplayMode() then
-						return T(_("Display mode: %1"), display_mode.text)
-					end
-				end
-				return _("Display mode")
-			end,
-			sub_item_table_func = function()
-				return self:genDisplayModeMenu()
 			end,
 		},
 		{
@@ -3785,6 +4176,7 @@ function FloatingDictionary:genContextMenuSettingsMenu()
 		{
 			text = _("Buttons shown in preview"),
 			sub_item_table_func = function()
+				self._ext_actions = nil
 				return self:genVisibleActionsMenu()
 			end,
 		},
@@ -3806,12 +4198,10 @@ function FloatingDictionary:genContextMenuSettingsMenu()
 			separator = true,
 		},
 		{
-			text = _("Show buttons from other dictionary plugins"),
-			checked_func = function()
-				return self:isShowExternalButtonsEnabled()
-			end,
-			callback = function()
-				self:setShowExternalButtonsEnabled(not self:isShowExternalButtonsEnabled())
+			text = _("Other plugins"),
+			sub_item_table_func = function()
+				self._ext_actions = nil
+				return self:genOtherPluginsMenu()
 			end,
 			separator = true,
 		},
@@ -3897,6 +4287,16 @@ end
 -- unset saved value falls back to the default rather than being trusted
 -- as-is.
 function FloatingDictionary:getPopupPositionMode()
+	-- The Kindle popup style reproduces a full-width, screen-edge-docked
+	-- panel (see the reference screenshot) rather than a card floating next
+	-- to the selected word, so it always forces "screen_edge" regardless of
+	-- the user's saved position-mode preference -- the same way it already
+	-- forces its own square corners/typography independently of user
+	-- settings. Switching back to Classic or Kobo restores whatever
+	-- position mode was saved.
+	if self:getPopupStyle() == POPUP_STYLE_KINDLE then
+		return POPUP_POSITION_SCREEN_EDGE
+	end
 	local saved = G_reader_settings:readSetting(SETTING_POPUP_POSITION_MODE)
 	if type(saved) == "string" and VALID_POPUP_POSITION_MODES[saved] then
 		return saved
@@ -3981,56 +4381,9 @@ function FloatingDictionary:genLanguageMenu()
 	return items
 end
 
--- Display mode (Personal / Minimal / Full / Language learner) -------------
--- A single persisted, exclusive choice -- never independent toggles. Picking
--- one mode always implies the others are off, since they all share this one
--- setting slot. Personal is the only mode backed by the individually
--- editable settings above; Minimal/Full/Language learner are fixed presets
--- that always apply the same overrides regardless of those settings.
-function FloatingDictionary:getDisplayMode()
-	local saved = G_reader_settings:readSetting(SETTING_DISPLAY_MODE)
-	for _idx, mode in ipairs(DISPLAY_MODES) do
-		if mode.id == saved then
-			return saved
-		end
-	end
-	return DISPLAY_MODE_PERSONAL
-end
-
-function FloatingDictionary:setDisplayMode(mode_id)
-	local valid = false
-	for _idx, mode in ipairs(DISPLAY_MODES) do
-		if mode.id == mode_id then
-			valid = true
-			break
-		end
-	end
-	if not valid then
-		mode_id = DISPLAY_MODE_PERSONAL
-	end
-	G_reader_settings:saveSetting(SETTING_DISPLAY_MODE, mode_id)
-end
-
--- Radio-button submenu listing the four mutually exclusive display modes.
--- Selecting one immediately persists it (replacing whatever was selected
--- before) and every render path re-reads getDisplayMode() live, so the
--- effect is applied on the very next popup shown -- no restart needed.
-function FloatingDictionary:genDisplayModeMenu()
-	local items = {}
-	for _idx, mode in ipairs(DISPLAY_MODES) do
-		table.insert(items, {
-			text = mode.text,
-			radio = true,
-			checked_func = function()
-				return self:getDisplayMode() == mode.id
-			end,
-			callback = function()
-				self:setDisplayMode(mode.id)
-			end,
-		})
-	end
-	return items
-end
+-- NOTE: getDisplayMode / setDisplayMode / genDisplayModeMenu have been
+-- removed entirely along with the whole "Display mode" feature. Footer
+-- visibility is now driven solely by isActionVisible()/isShowExternalButtonsEnabled().
 
 -- Popup style -------------------------------------------------------------
 
@@ -4579,6 +4932,9 @@ function FloatingDictionary:isActionVisible(action_id)
 	if action_id == ACTION_EXTERNAL then
 		return self:isShowExternalButtonsEnabled()
 	end
+	if type(action_id) == "string" and action_id:sub(1, 4) == "ext:" then
+		return self:isExternalButtonVisible(action_id:sub(5))
+	end
 	local saved = self:getVisibleActionsSetting()
 	if saved[action_id] == nil then
 		return true -- shown by default
@@ -4591,9 +4947,107 @@ function FloatingDictionary:setActionVisible(action_id, visible)
 		self:setShowExternalButtonsEnabled(visible)
 		return
 	end
+	if type(action_id) == "string" and action_id:sub(1, 4) == "ext:" then
+		return self:setExternalButtonVisible(action_id:sub(5), visible)
+	end
 	local saved = self:getVisibleActionsSetting()
 	saved[action_id] = visible and true or false
 	G_reader_settings:saveSetting(SETTING_VISIBLE_ACTIONS, saved)
+end
+
+-- Buttons registered by other plugins, exposed as dynamic footer actions so
+-- they get the same order / show-hide / custom text / custom icon controls
+-- as the built-in buttons. Discovered without a lookup context (no word), so
+-- labels come from the spec's own text/text_func. Cached per instance; the
+-- settings menus clear the cache when they open so newly installed plugins
+-- are picked up.
+function FloatingDictionary:getExternalActions()
+	if self._ext_actions then
+		return self._ext_actions
+	end
+
+	local list, by_id = {}, {}
+	local ok, specs = pcall(function()
+		return self:discoverExternalButtons(nil, nil, nil, 1, nil, nil, nil, true)
+	end)
+	if ok and type(specs) == "table" then
+		for _, spec in ipairs(specs) do
+			local key = self:getExternalButtonKey(spec)
+			if key and not by_id["ext:" .. key] then
+				local label = tostring(spec.menu_text or spec.text or key)
+				local action = {
+					id = "ext:" .. key,
+					label = label,
+					short_label = label,
+					kind = "external_button",
+					ext_key = key,
+				}
+				by_id[action.id] = action
+				table.insert(list, action)
+			end
+		end
+	end
+
+	self._ext_actions_by_id = by_id
+	-- Don't cache an empty result: plugins may still be registering.
+	if #list > 0 then
+		self._ext_actions = list
+	end
+	return list
+end
+
+-- Button Text for the small menu ONLY. Deliberately its own setting, separate
+-- from the "Buttons shown in preview" custom labels, so renaming a button in
+-- one place never changes the other.
+function FloatingDictionary:getSmallMenuCustomLabel(action_id)
+	local saved = G_reader_settings:readSetting("floatingdictionary_small_menu_custom_labels")
+	local label = type(saved) == "table" and saved[action_id] or nil
+	if type(label) ~= "string" then
+		return nil
+	end
+	label = trim(label)
+	if label == "" then
+		return nil
+	end
+	return label
+end
+
+function FloatingDictionary:setSmallMenuCustomLabel(action_id, new_label)
+	local saved = G_reader_settings:readSetting("floatingdictionary_small_menu_custom_labels")
+	if type(saved) ~= "table" then
+		saved = {}
+	end
+	local trimmed = trim(new_label)
+	if trimmed == "" then
+		saved[action_id] = nil
+	else
+		saved[action_id] = trimmed
+	end
+	G_reader_settings:saveSetting("floatingdictionary_small_menu_custom_labels", saved)
+end
+
+function FloatingDictionary:getActionById(action_id)
+	local action = ACTION_BY_ID[action_id]
+	if action then
+		return action
+	end
+	if type(action_id) == "string" and action_id:sub(1, 4) == "ext:" then
+		self:getExternalActions()
+		return self._ext_actions_by_id and self._ext_actions_by_id[action_id] or nil
+	end
+	-- Small selection-menu actions (ids "sm_*") live in their own registry
+	-- (SMALL_MENU_ACTION_BY_ID), separate from the footer's ACTION_BY_ID --
+	-- see the comment above SMALL_MENU_ACTIONS. Without this branch, every
+	-- caller that resolves a small-menu id through this same function
+	-- (showFloatingActionMenuForSelection, genSmallMenuButtonsMenu, ...)
+	-- always got nil back for "sm_*" ids, which made
+	-- showFloatingActionMenuForSelection build zero actions and refuse to
+	-- show the small menu at all, regardless of the user's settings.
+	local small_menu_action = SMALL_MENU_ACTION_BY_ID[action_id]
+	if small_menu_action then
+		return small_menu_action
+	end
+	return nil
 end
 
 -- Persisted footer button order. Falls back to the default ACTIONS order,
@@ -4606,19 +5060,48 @@ function FloatingDictionary:getActionOrderSetting()
 		saved = {}
 	end
 
+	-- Buttons registered by other plugins are dynamic actions (id "ext:<key>")
+	-- ordered together with the built-in ones. ACTION_EXTERNAL is only a
+	-- position anchor now: where it sat (default: just before "Next result",
+	-- or wherever an older saved order had it) is where newly discovered
+	-- external buttons are inserted the first time.
+	self:getExternalActions()
+	local ext_by_id = self._ext_actions_by_id or {}
+
 	local seen = {}
 	local order = {}
+	local ext_insert_pos
 	for _, action_id in ipairs(saved) do
-		if ACTION_BY_ID[action_id] and not seen[action_id] then
+		if action_id == ACTION_EXTERNAL then
+			ext_insert_pos = ext_insert_pos or (#order + 1)
+		elseif (ACTION_BY_ID[action_id] or ext_by_id[action_id]) and not seen[action_id] then
 			seen[action_id] = true
 			table.insert(order, action_id)
 		end
 	end
 
 	for _, action in ipairs(ACTIONS) do
-		if not seen[action.id] then
+		if action.id ~= ACTION_EXTERNAL and not seen[action.id] then
 			seen[action.id] = true
 			table.insert(order, action.id)
+		end
+	end
+
+	local pos = ext_insert_pos
+	if not pos then
+		pos = #order + 1
+		for i, id in ipairs(order) do
+			if id == ACTION_NAV_NEXT then
+				pos = i
+				break
+			end
+		end
+	end
+	for _, action in ipairs(self._ext_actions or {}) do
+		if not seen[action.id] then
+			seen[action.id] = true
+			table.insert(order, pos, action.id)
+			pos = pos + 1
 		end
 	end
 
@@ -4635,7 +5118,10 @@ function FloatingDictionary:getOrderedActions()
 	local order = self:getActionOrderSetting()
 	local ordered = {}
 	for _, action_id in ipairs(order) do
-		table.insert(ordered, ACTION_BY_ID[action_id])
+		local action = self:getActionById(action_id)
+		if action then
+			table.insert(ordered, action)
+		end
 	end
 	return ordered
 end
@@ -4667,18 +5153,18 @@ end
 
 -- Small selection menu buttons ------------------------------------------------
 -- Which SMALL_MENU_ACTIONS entries the small "Highlight / Add Note" style
--- menu shows, and in what order -- capped at SMALL_MENU_MAX_BUTTONS. Falls
--- back to SMALL_MENU_DEFAULT_BUTTONS the first time (nothing saved yet) and,
--- same as getActionOrderSetting above, silently drops any id no longer
--- recognised and any id beyond the 3-button cap, so a saved setting can never
--- produce more buttons than the menu is allowed to show.
+-- menu shows, and in what order -- capped at SMALL_MENU_MAX_BUTTONS (5).
+-- Falls back to SMALL_MENU_DEFAULT_BUTTONS the first time (nothing saved yet)
+-- and, same as getActionOrderSetting above, silently drops any id no longer
+-- recognised and any id beyond the cap, so a saved setting can never produce
+-- more buttons than the menu is allowed to show.
 function FloatingDictionary:getSmallMenuButtonIds()
 	local saved = G_reader_settings:readSetting(SETTING_SMALL_MENU_BUTTONS)
 	local order = {}
+	local seen = {}
 	if type(saved) == "table" then
-		local seen = {}
 		for _, id in ipairs(saved) do
-			if SMALL_MENU_ACTION_BY_ID[id] and not seen[id] and #order < SMALL_MENU_MAX_BUTTONS then
+			if self:getActionById(id) and not seen[id] and #order < SMALL_MENU_MAX_BUTTONS then
 				seen[id] = true
 				table.insert(order, id)
 			end
@@ -4687,8 +5173,20 @@ function FloatingDictionary:getSmallMenuButtonIds()
 
 	if #order == 0 then
 		for _, id in ipairs(SMALL_MENU_DEFAULT_BUTTONS) do
-			table.insert(order, id)
+			if #order >= SMALL_MENU_MAX_BUTTONS then
+				break
+			end
+			if self:getActionById(id) and not seen[id] then
+				seen[id] = true
+				table.insert(order, id)
+			end
 		end
+	end
+
+	-- Hard cap: never return more than SMALL_MENU_MAX_BUTTONS, regardless of
+	-- what's saved or how many sources contribute.
+	while #order > SMALL_MENU_MAX_BUTTONS do
+		table.remove(order)
 	end
 
 	return order
@@ -4708,9 +5206,9 @@ function FloatingDictionary:isSmallMenuButtonEnabled(action_id)
 end
 
 -- Enables/disables one action, appending newly-enabled ones to the end of
--- the current order. Refuses to enable a 4th button (returns false plus a
--- user-facing message) rather than silently dropping one of the existing
--- three -- the user must free up a slot first, exactly as requested.
+-- the current order. Refuses to enable a button beyond SMALL_MENU_MAX_BUTTONS
+-- (returns false plus a user-facing message) rather than silently dropping
+-- one of the existing ones -- the user must free up a slot first.
 function FloatingDictionary:toggleSmallMenuButton(action_id)
 	local order = self:getSmallMenuButtonIds()
 
@@ -4755,23 +5253,74 @@ function FloatingDictionary:moveSmallMenuButton(action_id, direction)
 end
 
 -- Settings submenu for the small selection menu: a checkbox row per
--- candidate action (toggle show/hide, capped at 3) plus, for every
--- currently-enabled one, a small "Move up / Move down / Remove" submenu to
--- set its order -- mirrors the existing "Buttons shown in preview" UX
--- (genVisibleActionsMenu) but simplified, since there's no icon config and
--- no unlimited footer to manage here, only up to 3 plain-text buttons.
+-- candidate action (toggle show/hide, capped at SMALL_MENU_MAX_BUTTONS) plus,
+-- for every currently-enabled one, a small "Move up / Move down / Remove"
+-- submenu to set its order -- mirrors the existing "Buttons shown in preview"
+-- UX (genVisibleActionsMenu) but simplified, since there's no icon config and
+-- no unlimited footer to manage here, only up to 5 plain-text buttons.
+--
+-- Candidate list is built by combining THREE sources (see issue #7/#8):
+--   1. The plain text buttons from ACTIONS (no `kind`) -- the exact same
+--      entries "Buttons shown in preview" governs, reusing their ids.
+--   2. The small menu's own SMALL_MENU_ACTIONS (Add Note), which has no
+--      footer equivalent. It is listed together with the text buttons
+--      (no separate heading of its own).
+--   3. Every button registered by other dictionary plugins, via the exact
+--      same source "Other plugins" (getExternalActions) already uses --
+--      no second parallel detection path.
+-- Candidates are labelled by source so the user can tell at a glance which
+-- is which, and no id is ever listed twice even if it appears in more than
+-- one source (deduplication is by id).
 function FloatingDictionary:genSmallMenuButtonsMenu()
 	local items = {}
 
 	table.insert(items, {
-		text = _("Choose up to 3 buttons for the small selection menu (shown when you select text), and set their order."),
+		text = T(_("Choose up to %1 buttons for the small selection menu, and set their order."), SMALL_MENU_MAX_BUTTONS),
 		enabled = false,
 		separator = true,
 	})
 
+	-- Built every time the menu is shown, so newly installed plugin buttons
+	-- or changed visibility are picked up without a restart.
+	local function build_candidates()
+		local candidates = {}
+		local seen = {}
+
+		for __, action in ipairs(ACTIONS) do
+			if not action.kind and not seen[action.id] then
+				seen[action.id] = true
+				table.insert(candidates, {
+					id = action.id, label = action.label, source = _("Text buttons"),
+				})
+			end
+		end
+
+		for __, action in ipairs(SMALL_MENU_ACTIONS) do
+			if not seen[action.id] then
+				seen[action.id] = true
+				table.insert(candidates, {
+					id = action.id, label = action.label, source = _("Text buttons"),
+				})
+			end
+		end
+
+		self:getExternalActions()
+		for __, action in ipairs(self._ext_actions or {}) do
+			if not seen[action.id] then
+				seen[action.id] = true
+				table.insert(candidates, {
+					id = action.id, label = action.label, source = _("Other plugins"),
+					external = true,
+				})
+			end
+		end
+
+		return candidates
+	end
+
 	local enabled_order = self:getSmallMenuButtonIds()
 	for pos, action_id in ipairs(enabled_order) do
-		local action = SMALL_MENU_ACTION_BY_ID[action_id]
+		local action = self:getActionById(action_id)
 		table.insert(items, {
 			text_func = function()
 				return T("%1. %2", pos, action and action.label or action_id)
@@ -4837,15 +5386,27 @@ function FloatingDictionary:genSmallMenuButtonsMenu()
 		separator = true,
 	})
 
-	for _, action in ipairs(SMALL_MENU_ACTIONS) do
+	local current_source = nil
+	for __, candidate in ipairs(build_candidates()) do
+		-- Only "Other plugins" gets a heading; the plain text buttons are
+		-- listed directly, without any title of their own.
+		if candidate.source ~= current_source then
+			current_source = candidate.source
+			if candidate.external then
+				table.insert(items, {
+					text = candidate.source,
+					enabled = false,
+				})
+			end
+		end
 		table.insert(items, {
-			text = action.label,
+			text = candidate.label,
 			checked_func = function()
-				return self:isSmallMenuButtonEnabled(action.id)
+				return self:isSmallMenuButtonEnabled(candidate.id)
 			end,
 			keep_menu_open = true,
 			callback = function(touchmenu_instance)
-				local ok, err = self:toggleSmallMenuButton(action.id)
+				local ok, err = self:toggleSmallMenuButton(candidate.id)
 				if not ok and err then
 					self:notify(err)
 				end
@@ -4853,6 +5414,176 @@ function FloatingDictionary:genSmallMenuButtonsMenu()
 					touchmenu_instance.item_table = self:genSmallMenuButtonsMenu()
 					touchmenu_instance:updateItems()
 				end
+			end,
+		})
+
+		-- Every button coming from another plugin gets its own Button Text
+		-- right under it: the text rendered on that button in the small menu
+		-- (and wherever else the button shows a text label). Purely visual --
+		-- the button's id/key and the action it runs are never touched.
+		if candidate.external then
+			table.insert(items, {
+				text_func = function()
+					local custom = self:getSmallMenuCustomLabel(candidate.id)
+					return T(_("    Button Text: %1"), custom or candidate.label)
+				end,
+				keep_menu_open = true,
+				callback = function(touchmenu_instance)
+					self:showActionCustomLabelDialog(candidate.id, touchmenu_instance, self.genSmallMenuButtonsMenu, {
+						description = _("Text shown on this button. Leave blank to use the plugin's own name."),
+						input_hint = candidate.label,
+						get = function(id) return self:getSmallMenuCustomLabel(id) end,
+						set = function(id, text) self:setSmallMenuCustomLabel(id, text) end,
+					})
+				end,
+			})
+		end
+	end
+
+	return items
+end
+
+-- "Other plugins" submenu -----------------------------------------------------
+-- Buttons registered by other installed dictionary plugins (e.g. Wikipedia,
+-- Assistant), listed by name with a master on/off switch above them. Styled
+-- like "Small menu buttons" above: each entry shows its position and current
+-- shown/hidden state, and tapping it opens a small sub-menu with Move up /
+-- Move down / Show-Hide. Reuses the same moveAction / isActionVisible /
+-- setActionVisible plumbing as the main "Buttons shown in preview" menu, just
+-- filtered down to only the "ext:" (other-plugin) action ids.
+function FloatingDictionary:genOtherPluginsMenu()
+	local items = {}
+
+	table.insert(items, {
+		text = _("Show buttons from other plugins"),
+		checked_func = function()
+			return self:isShowExternalButtonsEnabled()
+		end,
+		callback = function()
+			self:setShowExternalButtonsEnabled(not self:isShowExternalButtonsEnabled())
+		end,
+		separator = true,
+	})
+
+	self:getExternalActions()
+	local orderable = {}
+	for _, action in ipairs(self:getOrderedActions()) do
+		if type(action.id) == "string" and action.id:sub(1, 4) == "ext:" then
+			table.insert(orderable, action)
+		end
+	end
+
+	if #orderable == 0 then
+		table.insert(items, {
+			text = _("No other dictionary plugins detected."),
+			enabled = false,
+		})
+		return items
+	end
+
+	self._other_plugin_selected = self._other_plugin_selected or orderable[1].id
+	local selected_still_present = false
+	for _, action in ipairs(orderable) do
+		if action.id == self._other_plugin_selected then
+			selected_still_present = true
+			break
+		end
+	end
+	if not selected_still_present then
+		self._other_plugin_selected = orderable[1].id
+	end
+
+	local function refresh(touchmenu_instance)
+		if not touchmenu_instance then
+			return
+		end
+		touchmenu_instance.item_table = self:genOtherPluginsMenu()
+		touchmenu_instance:updateItems()
+	end
+
+	table.insert(items, {
+		text = _("Tap a plugin to select it, then use \"Move up\" / \"Move down\" to set its position. Use the checkbox row to show/hide it."),
+		enabled = false,
+		separator = true,
+	})
+
+	table.insert(items, {
+		text_func = function()
+			local action = self:getActionById(self._other_plugin_selected)
+			return T(_("Move up: %1"), action and action.label or self._other_plugin_selected)
+		end,
+		keep_menu_open = true,
+		callback = function(touchmenu_instance)
+			self:moveAction(self._other_plugin_selected, -1)
+			refresh(touchmenu_instance)
+		end,
+	})
+	table.insert(items, {
+		text_func = function()
+			local action = self:getActionById(self._other_plugin_selected)
+			return T(_("Move down: %1"), action and action.label or self._other_plugin_selected)
+		end,
+		keep_menu_open = true,
+		callback = function(touchmenu_instance)
+			self:moveAction(self._other_plugin_selected, 1)
+			refresh(touchmenu_instance)
+		end,
+	})
+	table.insert(items, {
+		text_func = function()
+			local action = self:getActionById(self._other_plugin_selected)
+			local visible = self:isActionVisible(self._other_plugin_selected)
+			return T(visible and _("Hide: %1") or _("Show: %1"), action and action.label or self._other_plugin_selected)
+		end,
+		keep_menu_open = true,
+		callback = function(touchmenu_instance)
+			self:setActionVisible(self._other_plugin_selected, not self:isActionVisible(self._other_plugin_selected))
+			refresh(touchmenu_instance)
+		end,
+	})
+	table.insert(items, {
+		text_func = function()
+			local action = self:getActionById(self._other_plugin_selected)
+			local custom = self:getActionCustomLabel(self._other_plugin_selected)
+			local current = custom or (action and getButtonInitial(action.short_label or action.label)) or "?"
+			return T(_("Button text: %1 (currently \"%2\")"),
+				action and action.label or self._other_plugin_selected, current)
+		end,
+		keep_menu_open = true,
+		callback = function(touchmenu_instance)
+			self:showActionCustomLabelDialog(self._other_plugin_selected, touchmenu_instance, self.genOtherPluginsMenu)
+		end,
+	})
+	table.insert(items, {
+		text_func = function()
+			local action = self:getActionById(self._other_plugin_selected)
+			local icon_path = self:getActionCustomIcon(self._other_plugin_selected)
+			local current = icon_path and icon_path:match("([^/]+)$") or _("none, using text")
+			return T(_("Button icon: %1 (currently: %2)"),
+				action and action.label or self._other_plugin_selected, current)
+		end,
+		separator = true,
+		keep_menu_open = true,
+		sub_item_table_func = function()
+			return self:genActionCustomIconMenu(self._other_plugin_selected)
+		end,
+	})
+
+	for pos, action in ipairs(orderable) do
+		local action_id = action.id
+		table.insert(items, {
+			text_func = function()
+				local visibility = self:isActionVisible(action_id) and _("shown") or _("hidden")
+				return T("%1. %2 (%3)", pos, action.label, visibility)
+			end,
+			radio = true,
+			checked_func = function()
+				return self._other_plugin_selected == action_id
+			end,
+			keep_menu_open = true,
+			callback = function(touchmenu_instance)
+				self._other_plugin_selected = action_id
+				refresh(touchmenu_instance)
 			end,
 		})
 	end
@@ -5099,39 +5830,11 @@ function FloatingDictionary:getDictionaryRankMap()
 end
 
 -- Submenu (plain native KOReader Menu items, same family of widgets as
--- genDisplayModeMenu/genVisibleActionsMenu above -- no custom widget code)
+-- genVisibleActionsMenu above -- no custom widget code)
 -- opened from the "Dictionary order" entry: one row per installed
 -- dictionary, showing its current rank ("1.", "2.", ...) and its name, plus
 -- a "Move up" / "Move down" pair of rows right underneath acting on
--- whichever dictionary the user tapped last. This is the single place users
--- set display priority for definitions, translations, synonyms, antonyms,
--- etymology, conjugations, pronunciation, usage examples, thesauri, or any
--- other dictionary type: every installed dictionary is treated the same way
--- here, regardless of what kind of content it contains, so the menu scales
--- to however many the user has installed without needing to recognize what
--- any of them are.
---
--- KOReader's touch-menu doesn't have a drag-and-drop reorder widget, and a
--- pair of always-visible per-row ↑/↓ chips (as used for footer buttons)
--- would need a bespoke widget popup to lay out reliably for an
--- open-ended, potentially long dictionary list. Tapping a row to "select"
--- it, then using two ordinary menu rows to nudge that selection, reuses
--- plain Menu items end to end and reads clearly at any list length: the
--- selected dictionary is marked, and "Move up"/"Move down" always describe
--- exactly what they'll do to it.
---
--- IMPORTANT re: touchmenu_instance:updateItems() -- that call only repaints
--- the rows already sitting in touchmenu_instance.item_table; it does NOT
--- re-invoke this function. Each row's text_func/checked_func is a closure
--- captured once, at the moment `items` below is built, over that specific
--- call's `pos`/`dict_name` locals. So a callback that mutates the saved
--- order and then only calls updateItems() repaints the *same, now-stale*
--- closures -- the settings do change, but the visible rows never do,
--- which is exactly the "buttons appear but don't move anything" bug this
--- replaces. The fix is to rebuild item_table from a fresh call to this
--- function first (so every row's closure is recreated against the new
--- order), and only then call updateItems() to repaint with those fresh
--- rows -- both steps are required.
+-- whichever dictionary the user tapped last.
 function FloatingDictionary:genDictionaryOrderMenu()
 	local order = self:getDictionaryOrderSetting()
 
@@ -5144,14 +5847,8 @@ function FloatingDictionary:genDictionaryOrderMenu()
 		}
 	end
 
-	-- Remembers which dictionary is "selected" for the Move up/down rows
-	-- below, for the lifetime of this menu instance. Defaults to the first
-	-- (highest-priority) dictionary so Move up/down are meaningful right
-	-- away without an extra tap.
 	self._dict_order_selected = self._dict_order_selected or order[1]
 
-	-- Drop the selection if that dictionary was uninstalled since the menu
-	-- was last opened.
 	local selected_still_installed = false
 	for _, name in ipairs(order) do
 		if name == self._dict_order_selected then
@@ -5163,12 +5860,6 @@ function FloatingDictionary:genDictionaryOrderMenu()
 		self._dict_order_selected = order[1]
 	end
 
-	-- Rebuilds touchmenu_instance's visible rows from scratch (fresh
-	-- closures over the current order/selection) and repaints. Every
-	-- callback below calls this instead of touchmenu_instance:updateItems()
-	-- directly, so the rows the user sees always match the just-changed
-	-- state -- see the note above the function for why calling
-	-- updateItems() alone is not enough.
 	local function refresh(touchmenu_instance)
 		if not touchmenu_instance then
 			return
@@ -5233,6 +5924,166 @@ end
 
 function FloatingDictionary:setShowExternalButtonsEnabled(enabled)
 	G_reader_settings:saveSetting(SETTING_SHOW_EXTERNAL_BUTTONS, enabled and true or false)
+end
+
+-- Per-button visibility for buttons harvested from other plugins. Setting
+-- key is inline (not a top-level local) because main.lua is at LuaJIT's
+-- 200-locals limit. Explicit user choice always wins; with no choice saved,
+-- every button is shown except the extra Assistant buttons (Wikipedia (AI),
+-- Term X-Ray (AI), custom prompts): only Dictionary (AI) is on by default.
+function FloatingDictionary:isAssistantButtonId(id)
+	return type(id) == "string" and id:sub(1, 10) == "assistant_"
+end
+
+function FloatingDictionary:getExternalButtonKey(spec)
+	if type(spec) ~= "table" then
+		return nil
+	end
+	return spec.id or (spec.text and ("text:" .. tostring(spec.text))) or nil
+end
+
+function FloatingDictionary:isExternalButtonVisible(key)
+	if not key then
+		return true
+	end
+	local saved = G_reader_settings:readSetting("floatingdictionary_external_buttons_visibility")
+	if type(saved) == "table" and type(saved[key]) == "boolean" then
+		return saved[key]
+	end
+	return not (self:isAssistantButtonId(key) and key ~= "assistant_dictionary")
+end
+
+function FloatingDictionary:setExternalButtonVisible(key, visible)
+	local saved = G_reader_settings:readSetting("floatingdictionary_external_buttons_visibility")
+	if type(saved) ~= "table" then
+		saved = {}
+	end
+	saved[key] = visible and true or false
+	G_reader_settings:saveSetting("floatingdictionary_external_buttons_visibility", saved)
+end
+
+-- Assistant needs the selected text to build the book context, so the
+-- selection/highlight can't be cleared when its button is tapped. Instead,
+-- clear it when Assistant's answer window (assistant_viewer) is closed.
+-- The class is wrapped once; the owner and dict_self are refreshed on every
+-- arm so a reloaded plugin instance always takes over.
+function FloatingDictionary:armAssistantHighlightCleanup(dict_self)
+	local ok, Viewer = pcall(require, "assistant_viewer")
+	if not ok or type(Viewer) ~= "table" or type(Viewer.onCloseWidget) ~= "function" then
+		return
+	end
+
+	self.assistant_cleanup_pending = true
+	self.assistant_cleanup_dict_self = dict_self
+	Viewer._floatingdictionary_owner = self
+
+	if Viewer._floatingdictionary_close_patched then
+		return
+	end
+	Viewer._floatingdictionary_close_patched = true
+
+	local original_onCloseWidget = Viewer.onCloseWidget
+	Viewer.onCloseWidget = function(viewer, ...)
+		local result = original_onCloseWidget(viewer, ...)
+		local owner = Viewer._floatingdictionary_owner
+		if owner and owner.assistant_cleanup_pending then
+			owner.assistant_cleanup_pending = false
+			local pending_dict_self = owner.assistant_cleanup_dict_self
+			owner.assistant_cleanup_dict_self = nil
+			owner.selection_snapshot = nil
+			pcall(function()
+				owner:clearOriginalHighlight(pending_dict_self)
+				owner:clearSelection()
+			end)
+		end
+		return result
+	end
+end
+
+-- Runs a button from another plugin, tapped in the dictionary card. Closes
+-- the small menu (and any dictionary cards) immediately, runs the plugin's
+-- own callback unchanged, and makes sure the original word's highlight is
+-- removed once that plugin's window is closed again.
+function FloatingDictionary:runExternalButtonCallback(dict_self, candidate)
+	-- Widgets already on screen: whatever appears after the callback and is
+	-- not in this set belongs to the external plugin.
+	local before = {}
+	for _, entry in ipairs(UIManager._window_stack or {}) do
+		if entry.widget then
+			before[entry.widget] = true
+		end
+	end
+
+	-- Small menu (and the dictionary cards) vanish right away.
+	self:closeAllCards(false)
+
+	local is_assistant = self:isAssistantButtonId(candidate.id)
+	if is_assistant then
+		self:armAssistantHighlightCleanup(dict_self)
+	end
+
+	local ok, err = pcall(candidate.callback)
+	if not ok then
+		logger.warn("FloatingDictionary: external dict button failed:", err)
+	end
+
+	if not is_assistant then
+		self:armExternalHighlightCleanup(dict_self, before)
+	end
+	return true
+end
+
+-- Clears the selection/highlight of the original word once the window the
+-- external plugin opened is closed. If no new window shows up (the plugin
+-- did something without one), clears it after a short wait instead.
+function FloatingDictionary:armExternalHighlightCleanup(dict_self, before)
+	local owner = self
+	local function finish()
+		owner.selection_snapshot = nil
+		pcall(function()
+			owner:clearOriginalHighlight(dict_self)
+			owner:clearSelection()
+		end)
+	end
+
+	local attempts = 0
+	local function poll()
+		attempts = attempts + 1
+		local new_widgets = {}
+		for _, entry in ipairs(UIManager._window_stack or {}) do
+			local widget = entry.widget
+			if widget and not before[widget] and not widget._floatingdictionary_watch then
+				table.insert(new_widgets, widget)
+			end
+		end
+
+		if #new_widgets > 0 then
+			local pending = #new_widgets
+			for _, widget in ipairs(new_widgets) do
+				widget._floatingdictionary_watch = true
+				local original_close = widget.onCloseWidget
+				widget.onCloseWidget = function(w, ...)
+					local result
+					if original_close then
+						result = original_close(w, ...)
+					end
+					pending = pending - 1
+					if pending == 0 then
+						finish()
+					end
+					return result
+				end
+			end
+			return
+		end
+
+		if attempts < 8 then
+			UIManager:scheduleIn(0.25, poll)
+		else
+			finish()
+		end
+	end
+	UIManager:scheduleIn(0.2, poll)
 end
 
 -- Default OFF, unlike most of this plugin's other toggles (which default
@@ -5373,27 +6224,27 @@ function FloatingDictionary:setSaveDestination(destination)
 end
 
 -- Ordered list of actions that should currently render as footer buttons.
--- Display mode overrides are applied on top of the user's individually
--- configured visibility/order (they never alter those persisted settings,
--- so switching back to Personal mode restores the exact previous setup):
---   Minimal         -> entire footer hidden (returns no actions at all).
---   Full            -> every available action forced visible, regardless
---                      of what's individually hidden.
---   Language learner -> Wikipedia and fulltext search are forced hidden.
+-- Driven solely by the user's individually configured visibility/order
+-- (the previous Display mode overrides have been removed entirely):
+--   * A text button hidden via isActionVisible() is never inserted here, so
+--     it never reaches makeButtons() and is never rendered (not dimmed,
+--     not grayed, not a placeholder -- simply absent).
+--   * External buttons always follow both the group switch and their own
+--     per-button visibility.
 function FloatingDictionary:getVisibleActions()
-	local mode = self:getDisplayMode()
-
-	if mode == DISPLAY_MODE_MINIMAL then
-		return {}
-	end
-
 	local visible = {}
 	for _, action in ipairs(self:getOrderedActions()) do
-		local hidden_by_language_mode = mode == DISPLAY_MODE_LANGUAGE
-			and (action.id == ACTION_WIKIPEDIA or action.id == ACTION_SEARCH_BOOK)
-
-		if not hidden_by_language_mode then
-			if mode == DISPLAY_MODE_FULL or self:isActionVisible(action.id) then
+		if action.kind == "external_button" then
+			if self:isShowExternalButtonsEnabled() and self:isActionVisible(action.id) then
+				table.insert(visible, action)
+			end
+		else
+			-- "Buttons shown in preview" (Shown/Hidden) is the single source
+			-- of truth for which buttons render in the floating dictionary
+			-- footer: a Hidden button is never inserted here, so it never
+			-- reaches makeButtons() and is never rendered (not dimmed,
+			-- not grayed, not a placeholder -- simply absent).
+			if self:isActionVisible(action.id) then
 				table.insert(visible, action)
 			end
 		end
@@ -5440,7 +6291,7 @@ end
 -- three-step chain -- none is hardcoded to a fixed icon/text anymore, so
 -- every button is equally customizable via "Buttons shown in preview".
 function FloatingDictionary:getActionIconSpec(action_id)
-	local action = ACTION_BY_ID[action_id]
+	local action = self:getActionById(action_id)
 	if not action then
 		return { icon = ICON_SEARCH }
 	end
@@ -5459,8 +6310,9 @@ function FloatingDictionary:getActionIconSpec(action_id)
 	-- unless the user has set their own custom text for this button (see
 	-- getActionButtonLabel). Reduced to a single capitalized initial by
 	-- default so it always fits the button instead of being cut off; a
-	-- custom label is shown as-is (long ones are elegantly truncated with
-	-- an ellipsis by the button's own TextWidget, see PreviewButton above).
+	-- custom label is shown as-is, and makeButtons() sizes the button to
+	-- the label's own natural width so even a long custom label renders
+	-- in full instead of being truncated.
 	return { text = self:getActionButtonLabel(action) }
 end
 
@@ -5475,7 +6327,17 @@ end
 function FloatingDictionary:genVisibleActionsMenu()
 	local orderable = {}
 	for _, action in ipairs(self:getOrderedActions()) do
-		if action.kind ~= "external" then
+		-- "Buttons shown in preview" governs *text* buttons only (Highlight,
+		-- Wikipedia, Translate, Search, Save for review, ...). Anything with
+		-- a "kind" is an icon-type entry -- the nav arrows, the
+		-- external-plugins group marker, or an individual other-plugin
+		-- button -- and belongs to its own dedicated control instead (nav
+		-- arrows are not user-toggled here; other-plugin buttons live in
+		-- "Other plugins", see genOtherPluginsMenu).
+		--
+		-- This is a deliberate guarantee of issue #3: the "Buttons shown in
+		-- preview" list must never include button icons.
+		if not action.kind then
 			table.insert(orderable, action)
 		end
 	end
@@ -5519,7 +6381,7 @@ function FloatingDictionary:genVisibleActionsMenu()
 
 	table.insert(items, {
 		text_func = function()
-			local action = ACTION_BY_ID[self._action_order_selected]
+			local action = self:getActionById(self._action_order_selected)
 			return T(_("Move up: %1"), action and action.label or self._action_order_selected)
 		end,
 		keep_menu_open = true,
@@ -5530,7 +6392,7 @@ function FloatingDictionary:genVisibleActionsMenu()
 	})
 	table.insert(items, {
 		text_func = function()
-			local action = ACTION_BY_ID[self._action_order_selected]
+			local action = self:getActionById(self._action_order_selected)
 			return T(_("Move down: %1"), action and action.label or self._action_order_selected)
 		end,
 		keep_menu_open = true,
@@ -5541,7 +6403,7 @@ function FloatingDictionary:genVisibleActionsMenu()
 	})
 	table.insert(items, {
 		text_func = function()
-			local action = ACTION_BY_ID[self._action_order_selected]
+			local action = self:getActionById(self._action_order_selected)
 			local visible = self:isActionVisible(self._action_order_selected)
 			return T(visible and _("Hide: %1") or _("Show: %1"), action and action.label or self._action_order_selected)
 		end,
@@ -5553,7 +6415,7 @@ function FloatingDictionary:genVisibleActionsMenu()
 	})
 	table.insert(items, {
 		text_func = function()
-			local action = ACTION_BY_ID[self._action_order_selected]
+			local action = self:getActionById(self._action_order_selected)
 			local custom = self:getActionCustomLabel(self._action_order_selected)
 			local current = custom or (action and getButtonInitial(action.short_label or action.label)) or "?"
 			return T(_("Button text: %1 (currently \"%2\")"),
@@ -5566,7 +6428,7 @@ function FloatingDictionary:genVisibleActionsMenu()
 	})
 	table.insert(items, {
 		text_func = function()
-			local action = ACTION_BY_ID[self._action_order_selected]
+			local action = self:getActionById(self._action_order_selected)
 			local icon_path = self:getActionCustomIcon(self._action_order_selected)
 			local current = icon_path and icon_path:match("([^/]+)$") or _("none, using text")
 			return T(_("Button icon: %1 (currently: %2)"),
@@ -5609,20 +6471,26 @@ end
 -- initial letter -- exactly the "leave empty to reset" behavior asked for.
 -- A separate "Reset to default" button is also offered for a one-tap clear
 -- without having to manually empty the field first.
-function FloatingDictionary:showActionCustomLabelDialog(action_id, touchmenu_instance)
-	local action = ACTION_BY_ID[action_id]
+function FloatingDictionary:showActionCustomLabelDialog(action_id, touchmenu_instance, refresh_menu_func, opts)
+	local action = self:getActionById(action_id)
 	if not action then
 		return
 	end
+	opts = opts or {}
 
-	local current = self:getActionCustomLabel(action_id)
+	refresh_menu_func = refresh_menu_func or self.genVisibleActionsMenu
+
+	local get_label = opts.get or function(id) return self:getActionCustomLabel(id) end
+	local set_label = opts.set or function(id, text) self:setActionCustomLabel(id, text) end
+	local current = get_label(action_id)
 
 	local dialog
 	dialog = InputDialog:new{
 		title = T(_("Button text: %1"), action.label),
-		description = _("Text shown on this button in the popup. Leave blank to use the default single-letter icon."),
+		description = opts.description
+			or _("Text shown on this button in the popup. Leave blank to use the default single-letter icon."),
 		input = current or "",
-		input_hint = getButtonInitial(action.short_label or action.label),
+		input_hint = opts.input_hint or getButtonInitial(action.short_label or action.label),
 		buttons = {
 			{
 				{
@@ -5635,10 +6503,10 @@ function FloatingDictionary:showActionCustomLabelDialog(action_id, touchmenu_ins
 				{
 					text = _("Reset to default"),
 					callback = function()
-						self:setActionCustomLabel(action_id, nil)
+						set_label(action_id, nil)
 						UIManager:close(dialog)
 						if touchmenu_instance then
-							touchmenu_instance.item_table = self:genVisibleActionsMenu()
+							touchmenu_instance.item_table = refresh_menu_func(self)
 							touchmenu_instance:updateItems()
 						end
 					end,
@@ -5648,10 +6516,10 @@ function FloatingDictionary:showActionCustomLabelDialog(action_id, touchmenu_ins
 					is_enter_default = true,
 					callback = function()
 						local input_text = dialog:getInputText()
-						self:setActionCustomLabel(action_id, input_text)
+						set_label(action_id, input_text)
 						UIManager:close(dialog)
 						if touchmenu_instance then
-							touchmenu_instance.item_table = self:genVisibleActionsMenu()
+							touchmenu_instance.item_table = refresh_menu_func(self)
 							touchmenu_instance:updateItems()
 						end
 					end,
@@ -5669,12 +6537,7 @@ end
 -- removed since the menu was last opened is picked up immediately, no
 -- restart needed). The user never types a filename or path -- they just tap
 -- the icon they want from the list, exactly like picking a font from
--- "Preview font" (genFontFamilyMenu) above. Plain text rows (filename only)
--- are used rather than an inline graphical preview: KOReader's touchmenu
--- item format has no standard field for embedding an arbitrary widget in a
--- menu row, and a filename-only radio list is what genFontFamilyMenu and
--- genDictionaryOrderMenu already do elsewhere in this same settings menu,
--- so it stays visually consistent with the rest of the plugin.
+-- "Preview font" (genFontFamilyMenu) above.
 function FloatingDictionary:genActionCustomIconMenu(action_id)
 	local items = {}
 
@@ -5727,6 +6590,7 @@ end
 -- arrows immediately reflect the new state. Reuses the same persisted
 -- settings as the plugin submenu (genVisibleActionsMenu).
 function FloatingDictionary:showButtonSettingsMenu(on_close)
+	self._ext_actions = nil
 	local CHECKBOX_ON = "☑"
 	local CHECKBOX_OFF = "☐"
 	local RADIO_ON = "●"
@@ -5850,7 +6714,7 @@ function FloatingDictionary:showButtonSettingsMenu(on_close)
 		end
 
 		for list_pos, action_id in ipairs(visible_ids) do
-			local action = ACTION_BY_ID[action_id]
+			local action = self:getActionById(action_id)
 			local initial = self:getActionButtonLabel(action)
 			local is_first = list_pos == 1
 			local is_last = list_pos == #visible_ids
@@ -6124,10 +6988,6 @@ function FloatingDictionary:closeAllCards(invoke_callbacks)
 	end
 end
 
--- Dismisses the current topmost card (tap-outside/swipe/Back on it). If that
--- was the last card in the stack, ends the whole lookup session: clears the
--- book highlight/selection tied to the root lookup. Otherwise, the card
--- below it is simply left showing -- no rebuild needed.
 -- Dismisses the whole cascade (tap-outside/swipe/Back on the topmost card):
 -- closes every card in the stack and ends the lookup session, clearing the
 -- book highlight/selection tied to the root lookup.
@@ -6448,27 +7308,7 @@ function FloatingDictionary:patchDictionary()
 		-- the floating dictionary card (isPreviewEnabled), so it must fire
 		-- even when the floating dictionary itself is turned off, or when a
 		-- multi-word phrase has no matching dictionary headword at all
-		-- (results is nil/empty). Kobo (and now this plugin) shows that
-		-- card regardless of whether a definition was found, for both a
-		-- word and a phrase, so the check here must not depend on results
-		-- or on isPhraseSelection at all.
-		--
-		-- This only ever applies to *root* selections made by the user's
-		-- own hold-and-drag gesture. Cross-reference lookups triggered by
-		-- tapping a linked word inside an already-open definition (link ~=
-		-- nil) or by a cascade step queued from within this plugin's own
-		-- popups (pending_cascade_step) are never a fresh selection the
-		-- user could highlight/annotate in that sense -- they're always a
-		-- single programmatic word lookup -- so those always skip this
-		-- branch and fall through to the normal flow.
-		--
-		-- Deliberately no `return` here: showFloatingActionMenuForSelection
-		-- shows the Highlight/Add Note card as a side effect and this then
-		-- falls straight through into the normal dictionary flow below, so
-		-- the definition card (if any match exists, and if the floating
-		-- dictionary is itself enabled) and the Highlight/Add Note card can
-		-- both be visible at the same time, anchored to opposite edges of
-		-- the screen.
+		-- (results is nil/empty).
 		--
 		-- Deferred by a tick rather than called inline: when the floating
 		-- dictionary is also enabled, this falls through below into
@@ -6501,9 +7341,7 @@ function FloatingDictionary:patchDictionary()
 		-- Word review history is now recorded ONLY from the small selection
 		-- menu's dedicated "Save for review" button (see
 		-- addSelectionToWordReview / showFloatingActionMenuForSelection
-		-- below), never automatically here on every real lookup. Previously
-		-- this called WordReview:recordLookup on every successful lookup;
-		-- that automatic bookkeeping has been removed on purpose.
+		-- below), never automatically here on every real lookup.
 
 		if plugin.native_dict_popup_active then
 			local wrapped_close_callback = plugin:beginNativeDictionaryPopup(dict_close_callback)
@@ -6712,14 +7550,7 @@ function FloatingDictionary:createSmartHighlight(hl_self)
 	-- KOReader's own hold-release cleanup.
 	UIManager:scheduleIn(0.05, function()
 		local ok, err = pcall(function()
-			local index = hl_self:saveHighlight(true)
-			-- Remembered the same way highlightSelection/startSelectMode
-			-- do, so "Extend last highlight" (see extendLastHighlight)
-			-- also picks up highlights created silently through Smart
-			-- Highlight, not just ones made from the small menu.
-			if type(index) == "number" then
-				self.last_highlight_index = index
-			end
+			hl_self:saveHighlight(true)
 
 			-- Clears the transient selection overlay only -- the saved
 			-- highlight annotation itself is independent of it and stays
@@ -6802,17 +7633,48 @@ function FloatingDictionary:showFloatingActionMenuForSelection(dict_self, word, 
 	-- genSmallMenuButtonsMenu / getSmallMenuButtonIds. Every candidate is a
 	-- native KOReader action; none of them are reimplemented here, this just
 	-- wires each configured id to the plugin's existing handler.
+	--
+	-- results/boxes are threaded through to runSmallMenuAction so external
+	-- plugin buttons (ext:* ids) can be dispatched correctly: without the
+	-- full dict context available, an external button had no way to run its
+	-- own callback here and would silently do nothing. Ids are also
+	-- de-duplicated and re-capped at SMALL_MENU_MAX_BUTTONS on this side of
+	-- the boundary (the settings menu already enforces it, but a saved
+	-- table from an earlier version or a hand-edited setting must not be
+	-- able to sneak past the real render path).
 	local actions = {}
-	for _, action_id in ipairs(self:getSmallMenuButtonIds()) do
-		local spec = SMALL_MENU_ACTION_BY_ID[action_id]
-		if spec then
-			table.insert(actions, {
-				text = spec.short_label or spec.label,
-				callback = function()
-					plugin:runSmallMenuAction(action_id, dict_self, word, review_word, dict_close_callback, review_definition)
-				end,
-			})
+	local seen_ids = {}
+	local function add_action(action_id)
+		if seen_ids[action_id] then
+			return
 		end
+		if #actions >= SMALL_MENU_MAX_BUTTONS then
+			return
+		end
+		local spec = self:getActionById(action_id)
+		if not spec then
+			return
+		end
+		seen_ids[action_id] = true
+		-- Buttons from other plugins show the user's own Button Text when one
+		-- is set (see genSmallMenuButtonsMenu > Other plugins); only the
+		-- visible text changes, never the id or the action it runs.
+		local button_text = spec.short_label or spec.label
+		if spec.kind == "external_button" then
+			button_text = self:getSmallMenuCustomLabel(action_id) or button_text
+		end
+		table.insert(actions, {
+			text = button_text,
+			callback = function()
+				plugin:runSmallMenuAction(
+					action_id, dict_self, word, review_word,
+					dict_close_callback, review_definition, results, boxes)
+			end,
+		})
+	end
+
+	for _, action_id in ipairs(self:getSmallMenuButtonIds()) do
+		add_action(action_id)
 	end
 
 	if #actions == 0 then
@@ -6850,26 +7712,87 @@ end
 -- handlers. Kept as one place so genSmallMenuButtonsMenu's ids and this
 -- dispatch never drift apart, and so showFloatingActionMenuForSelection
 -- above doesn't need one hardcoded closure per possible action.
-function FloatingDictionary:runSmallMenuAction(action_id, dict_self, word, review_word, dict_close_callback, review_definition)
+--
+-- action_id can come from any of the three sources the small menu is built
+-- from (see genSmallMenuButtonsMenu): a plain text-button id from ACTIONS
+-- (e.g. ACTION_WIKIPEDIA, ACTION_TRANSLATE, ACTION_VOCABULARY,
+-- ACTION_SEARCH_BOOK), a small-menu-only id from SMALL_MENU_ACTIONS
+-- ("sm_*"), or an external-plugin id ("ext:*"). This function must handle
+-- all three -- previously it compared against SMALL_MENU_ACTION_WIKIPEDIA /
+-- SMALL_MENU_ACTION_TRANSLATE / SMALL_MENU_ACTION_WORD_REVIEW /
+-- SMALL_MENU_ACTION_SEARCH_BOOK constants which were never defined
+-- anywhere (nil), so every one of those branches was dead code and the
+-- small menu's Wikipedia/Translate/Save/Search taps silently did nothing
+-- (the small menu just closed and the underlying dictionary popup was left
+-- in a stale, half-active state -- the "stuck small menu" symptom).
+function FloatingDictionary:runSmallMenuAction(action_id, dict_self, word, review_word, dict_close_callback, review_definition, results, boxes)
+	-- Wikipedia / Translate need a working connection, same as runAction
+	-- above: don't close the small action menu until NetworkMgr:runWhenOnline
+	-- confirms we're actually online, so declining the "connect to wifi?"
+	-- prompt leaves the menu open instead of vanishing with nothing to show.
+	if action_id == ACTION_WIKIPEDIA then
+		local NetworkMgr = require("ui/network/manager")
+		NetworkMgr:runWhenOnline(function()
+			self:closeActionMenu()
+			self:lookupWikipedia(dict_self, word, dict_close_callback)
+		end)
+		return true
+	elseif action_id == ACTION_TRANSLATE then
+		local NetworkMgr = require("ui/network/manager")
+		NetworkMgr:runWhenOnline(function()
+			self:closeActionMenu()
+			-- Keep the selection/highlight state around: translating
+			-- doesn't consume the selection, and the translation viewer is
+			-- a separate popup layered on top, same reasoning as the
+			-- footer's own ACTION_TRANSLATE handling in runAction.
+			self:translateText(word)
+		end)
+		return true
+	end
+
+	-- External buttons registered by other dictionary plugins (ids of the
+	-- form "ext:<key>"). Reuses the exact same discoverExternalButtons
+	-- source "Other plugins" already uses -- no second detection path.
+	if type(action_id) == "string" and action_id:sub(1, 4) == "ext:" then
+		local action = self:getActionById(action_id)
+		if not action or not action.ext_key then
+			self:closeActionMenu()
+			return true
+		end
+		local ext_specs = self:discoverExternalButtons(
+			dict_self, word, results and results[1], 1, results, boxes, nil)
+		local matched = false
+		for _, candidate in ipairs(ext_specs) do
+			if self:getExternalButtonKey(candidate) == action.ext_key then
+				if self:isAssistantButtonId(candidate.id) then
+					self:armAssistantHighlightCleanup(dict_self)
+				end
+				self:closeActionMenu()
+				local ok, err = pcall(candidate.callback)
+				if not ok then
+					logger.warn("FloatingDictionary: external small-menu button failed:", err)
+				end
+				matched = true
+				break
+			end
+		end
+		if not matched then
+			self:closeActionMenu()
+		end
+		return true
+	end
+
 	self:closeActionMenu()
 
-	if action_id == SMALL_MENU_ACTION_HIGHLIGHT then
+	if action_id == ACTION_HIGHLIGHT then
 		-- Do not clear the selection before highlighting -- ReaderHighlight
 		-- needs the original selected_text/hold_pos to create the annotation.
 		return self:highlightSelection(dict_self, dict_close_callback)
 	elseif action_id == SMALL_MENU_ACTION_ADD_NOTE then
 		return self:addNoteForSelection(dict_self, dict_close_callback)
-	elseif action_id == SMALL_MENU_ACTION_WORD_REVIEW then
+	elseif action_id == ACTION_VOCABULARY then
 		return self:addSelectionToWordReview(review_word or word, review_definition)
-	elseif action_id == SMALL_MENU_ACTION_WIKIPEDIA then
-		return self:lookupWikipedia(dict_self, word)
-	elseif action_id == SMALL_MENU_ACTION_TRANSLATE then
-		-- Keep the selection/highlight state around: translating doesn't
-		-- consume the selection, and the translation viewer is a separate
-		-- popup layered on top, same reasoning as the footer's own
-		-- ACTION_TRANSLATE handling in runAction.
-		return self:translateText(word)
-	elseif action_id == SMALL_MENU_ACTION_SEARCH_BOOK then
+	elseif action_id == ACTION_SEARCH_BOOK then
 		self.selection_snapshot = nil
 		self:clearOriginalHighlight(dict_self)
 		self:clearSelection()
@@ -6877,10 +7800,6 @@ function FloatingDictionary:runSmallMenuAction(action_id, dict_self, word, revie
 			pcall(dict_close_callback)
 		end
 		return self:showSearchDialog(word)
-	elseif action_id == SMALL_MENU_ACTION_SELECT_MODE then
-		return self:startSelectMode(dict_self, dict_close_callback)
-	elseif action_id == SMALL_MENU_ACTION_EXTEND_LAST then
-		return self:extendLastHighlight(dict_self, dict_close_callback)
 	end
 
 	return true
@@ -6901,17 +7820,6 @@ end
 -- true sentence-boundary detection, which KOReader only exposes for rolling
 -- (epub-like) documents -- this simpler approach works the same way for
 -- every document type the dictionary itself supports.
---
--- The raw prev/next word windows are then trimmed down to sentence
--- boundaries (see trimContextToSentenceStart/trimContextToSentenceEnd
--- below): backward from the selected word to the start of the sentence it
--- sits in (a "." followed by whitespace and an uppercase letter), and
--- forward to the sentence's closing "." -- so the saved context reads as a
--- full, natural sentence whenever the surrounding text allows it, instead
--- of an arbitrary word-count slice that can start/end mid-thought. When no
--- such boundary can be found within the captured window, the best
--- available fragment (the untrimmed window) is used instead, exactly as
--- before.
 --
 -- Returns a plain trimmed string, or nil if no context could be captured
 -- (no live selection position, unsupported document type, or the lookup
@@ -7013,13 +7921,6 @@ end
 -- exposed anywhere in the UI (small menu's "Save" button, footer's "Save
 -- for review" button); which store(s) it actually reaches depends solely on
 -- that setting.
---
--- definition_hint is no longer forwarded to Vocabulary Builder itself --
--- see mirrorWordToVocabBuilder above: the native "WordLookedUp" event
--- handler captures its own prev/next context straight from the live
--- selection, exactly as it does for its own "Add to vocabulary builder"
--- button. definition_hint is still used for nothing else here and is kept
--- only so existing callers (small menu / footer) don't need to change.
 --
 -- Deliberately does not clear the selection/highlight or invoke
 -- dict_close_callback: saving a word is a lightweight, non-destructive tag
@@ -7429,16 +8330,6 @@ function FloatingDictionary:highlightSelection(dict_self, dict_close_callback)
 		local ok, err = pcall(function()
 			if type(highlight.showHighlightPrompt) == "function" then
 				highlight:showHighlightPrompt(function(...)
-					-- Best-effort: if the prompt's own completion callback
-					-- happens to hand back the new annotation index (its
-					-- exact signature isn't guaranteed across KOReader
-					-- versions), remember it the same way the saveHighlight
-					-- branch below does, so "Extend last highlight" can
-					-- still find it. Harmless no-op when it doesn't.
-					local maybe_index = ...
-					if type(maybe_index) == "number" then
-						self.last_highlight_index = maybe_index
-					end
 					self.selection_snapshot = nil
 					if dict_close_callback then
 						pcall(dict_close_callback, ...)
@@ -7446,7 +8337,6 @@ function FloatingDictionary:highlightSelection(dict_self, dict_close_callback)
 				end)
 			elseif type(highlight.saveHighlight) == "function" then
 				local index = highlight:saveHighlight(true)
-				self.last_highlight_index = index
 				if type(highlight.clear) == "function" then
 					highlight:clear()
 				end
@@ -7465,143 +8355,82 @@ function FloatingDictionary:highlightSelection(dict_self, dict_close_callback)
 	return true
 end
 
--- Puts the current selection into KOReader's native select mode instead of
--- saving a highlight outright -- the same underlying call KOReader's own
--- built-in highlight dialog uses for its "Select" button (see the
--- ["01_select"] entry in ReaderHighlight:init, apps/reader/modules/
--- readerhighlight.lua). Once in select mode the user can hold-pan from
--- either end of the temporary highlight to grow it across paragraphs or
--- pages, then finish with a normal hold-release -- addresses the "trigger
--- select mode" part of github issue #14.
-function FloatingDictionary:startSelectMode(dict_self, dict_close_callback)
+-- Hands the current selection over to KOReader's Wikipedia lookup, then ends
+-- this plugin's lookup session (issue #19).
+function FloatingDictionary:lookupWikipedia(dict_self, search_text, dict_close_callback)
 	local highlight = self:restoreSelection(dict_self)
 
-	if not highlight then
-		return self:notify(_("No selection to extend."))
-	end
-
-	if not highlight.selected_text
-		and highlight.hold_pos
-		and type(highlight.highlightFromHoldPos) == "function" then
-		pcall(function()
-			highlight:highlightFromHoldPos()
-		end)
-	end
-
-	if not (highlight.selected_text and highlight.selected_text.pos0 and highlight.selected_text.pos1) then
-		return self:notify(_("No selection to extend."))
-	end
-
-	if type(highlight.startSelection) ~= "function" then
-		logger.warn("FloatingDictionary: Select mode unavailable (startSelection missing).")
-		return self:notify(_("Select mode isn't available on this KOReader version."))
-	end
-
-	UIManager:scheduleIn(0.05, function()
-		local ok, err = pcall(function()
-			-- No index passed: starts a brand-new temporary highlight and
-			-- enters select mode on it (mirrors the native "Select" button,
-			-- as opposed to "Extend" which passes an existing index -- see
-			-- extendLastHighlight below).
-			local index = highlight:startSelection()
-			if type(index) == "number" then
-				self.last_highlight_index = index
-			end
-			self.selection_snapshot = nil
-			if dict_close_callback then
-				pcall(dict_close_callback)
-			end
-		end)
-
-		if not ok then
-			logger.warn("FloatingDictionary: Select mode failed:", err)
+	-- Guard so this only runs once: fireLookupEvent's own close_callback and
+	-- the "couldn't even fire the lookup" fallback below could otherwise both
+	-- call it.
+	local ended = false
+	local function endLookupSession()
+		if ended then
+			return
 		end
-	end)
-
-	return true
-end
-
--- Re-enters select mode on the most recently created highlight (tracked in
--- self.last_highlight_index, set by highlightSelection/createSmartHighlight/
--- startSelectMode above whenever a highlight is actually saved), using the
--- exact same native call as KOReader's own "Extend" button (the same
--- ReaderHighlight:startSelection(index) as startSelectMode above, just with
--- an existing annotation index instead of none). This lets a selection that
--- starts right after a previous highlight grow that highlight instead of
--- becoming a separate one, without this plugin re-implementing KOReader's
--- own highlight-box/text merging -- addresses the "extend the previous
--- highlight automatically" part of github issue #14.
-function FloatingDictionary:extendLastHighlight(dict_self, dict_close_callback)
-	local highlight = self:getActiveHighlight(dict_self)
-	if not highlight then
-		return self:notify(_("Select mode isn't available right now."))
-	end
-
-	local index = self.last_highlight_index
-	local annotations = highlight.ui and highlight.ui.annotation and highlight.ui.annotation.annotations
-	if not index or not annotations or not annotations[index] then
-		return self:notify(_("No recent highlight to extend."))
-	end
-
-	if type(highlight.startSelection) ~= "function" then
-		logger.warn("FloatingDictionary: Extend highlight unavailable (startSelection missing).")
-		return self:notify(_("Select mode isn't available on this KOReader version."))
-	end
-
-	-- The phrase the user just selected to open this menu isn't what's
-	-- being extended -- clear it first so select mode starts cleanly from
-	-- the saved highlight's own endpoint.
-	self.selection_snapshot = nil
-	if type(highlight.clear) == "function" then
-		pcall(function()
-			highlight:clear()
-		end)
-	end
-
-	UIManager:scheduleIn(0.05, function()
-		local ok, err = pcall(function()
-			highlight:startSelection(index)
-			if dict_close_callback then
-				pcall(dict_close_callback)
-			end
-		end)
-
-		if not ok then
-			logger.warn("FloatingDictionary: Extend highlight failed:", err)
-		end
-	end)
-
-	return true
-end
-
-function FloatingDictionary:lookupWikipedia(dict_self, search_text)
-	local highlight = self:restoreSelection(dict_self)
-
-	if highlight and type(highlight.lookupWikipedia) == "function" and self:hasHighlightSelection(highlight) then
-		UIManager:scheduleIn(0.05, function()
-			local ok, err = pcall(function()
-				if not highlight.selected_text
-					and highlight.hold_pos
-					and type(highlight.highlightFromHoldPos) == "function" then
-					highlight:highlightFromHoldPos()
-				end
-				highlight:lookupWikipedia()
-				self.selection_snapshot = nil
+		ended = true
+		self.selection_snapshot = nil
+		-- Both calls are idempotent: dict_self.highlight and `highlight`
+		-- are normally the same ReaderHighlight instance.
+		self:clearOriginalHighlight(dict_self)
+		if highlight and type(highlight.clear) == "function" then
+			pcall(function()
+				highlight:clear()
 			end)
+		end
+		self:clearSelection()
+		if dict_close_callback then
+			pcall(dict_close_callback)
+		end
+	end
 
-			if not ok then
-				logger.warn("FloatingDictionary: Wikipedia action failed:", err)
-			end
-		end)
+	-- Fires the same "LookupWikipedia" event KOReader's own DictQuickLookup
+	-- fires (word, is_sane, box, get_fullpage, forced_lang, dict_close_callback)
+	-- -- crucially with our own close callback threaded through as the 6th
+	-- argument, instead of calling ReaderHighlight:lookupWikipedia() (which
+	-- has no close_callback parameter at all) or firing the event with just
+	-- a word. ReaderWikipedia only calls that callback once the Wikipedia
+	-- popup itself is closed by the user, so the highlight/selection now
+	-- stays until then instead of being cleared the instant Wikipedia opens
+	-- -- fixes github issue #19 (word still highlighted after closing
+	-- Wikipedia, and a stray new floating dictionary popup on top of it).
+	local function fireLookupEvent(word, box)
+		word = trim(word)
+		if word == "" or not (self.ui and self.ui.handleEvent) then
+			return false
+		end
+		self.ui:handleEvent(Event:new("LookupWikipedia", word, false, box, false, nil, endLookupSession))
 		return true
 	end
 
-	search_text = trim(search_text)
-	if search_text ~= "" and self.ui and self.ui.handleEvent then
-		self.ui:handleEvent(Event:new("LookupWikipedia", search_text))
+	if highlight and self:hasHighlightSelection(highlight) then
+		if not highlight.selected_text
+			and highlight.hold_pos
+			and type(highlight.highlightFromHoldPos) == "function" then
+			pcall(function()
+				highlight:highlightFromHoldPos()
+			end)
+		end
+
+		local selected = highlight.selected_text
+		local word = selected and selected.text or search_text
+		if type(word) == "string" then
+			word = util.cleanupSelectedText(word)
+		end
+		local box = selected and selected.sboxes
+
+		if fireLookupEvent(word, box) then
+			return true
+		end
+		-- Couldn't build a query from the restored selection; fall through to
+		-- the plain search_text path below.
+	end
+
+	if fireLookupEvent(search_text, nil) then
 		return true
 	end
 
+	endLookupSession()
 	return self:notify(_("No selection to look up."))
 end
 
@@ -7657,8 +8486,11 @@ end
 --                      DictQuickLookup:new{...}
 -- Any handler reaching for a field we still don't provide fails silently
 -- (caught below) instead of crashing the reader.
-function FloatingDictionary:discoverExternalButtons(dict_self, word, result, result_index, results, boxes, link)
-	if not self:isShowExternalButtonsEnabled() then
+-- include_hidden = true is used by the settings menu: returns every button
+-- regardless of the show/hide choices (and ignores show_func), so each can be
+-- toggled individually.
+function FloatingDictionary:discoverExternalButtons(dict_self, word, result, result_index, results, boxes, link, include_hidden)
+	if not include_hidden and not self:isShowExternalButtonsEnabled() then
 		return {}
 	end
 
@@ -7716,17 +8548,37 @@ function FloatingDictionary:discoverExternalButtons(dict_self, word, result, res
 	-- (e.g. X-Ray on newer KOReader versions). Iterated in a stable
 	-- (sorted) order since pairs() over a plain table has no guaranteed
 	-- order, so button placement doesn't shuffle between lookups.
+	--
+	-- KOReader instantiates plugins in alphabetical path order, so plugins
+	-- sorted before this one (e.g. assistant.koplugin) call
+	-- addToDictButtons *before* our wrapper is installed and are never seen
+	-- by it. ReaderDictionary keeps every registered spec in _dict_buttons
+	-- (this is what the native popup reads), so read that table directly
+	-- and use the wrapper's table only as a fallback.
+	local modern_specs = {}
+	for id, spec in pairs(modern_plugin_buttons_shared) do
+		modern_specs[id] = spec
+	end
+	local native_specs = self.ui and self.ui.dictionary and self.ui.dictionary._dict_buttons
+	if type(native_specs) == "table" then
+		for id, spec in pairs(native_specs) do
+			if type(spec) == "table" then
+				modern_specs[id] = spec
+			end
+		end
+	end
+
 	local modern_ids = {}
-	for id in pairs(modern_plugin_buttons_shared) do
+	for id in pairs(modern_specs) do
 		table.insert(modern_ids, id)
 	end
 	table.sort(modern_ids)
 
 	for _, id in ipairs(modern_ids) do
-		local spec = modern_plugin_buttons_shared[id]
+		local spec = modern_specs[id]
 
 		local should_show = true
-		if type(spec.show_func) == "function" then
+		if not include_hidden and type(spec.show_func) == "function" then
 			local ok_show, res = pcall(spec.show_func, fake_popup)
 			should_show = ok_show and res
 		end
@@ -7744,6 +8596,7 @@ function FloatingDictionary:discoverExternalButtons(dict_self, word, result, res
 
 			table.insert(discovered, {
 				id = spec.id,
+				menu_text = spec.menu_text,
 				text = btn_text,
 				icon = spec.icon,
 				callback = function()
@@ -7798,39 +8651,58 @@ function FloatingDictionary:runAction(action_id, dict_self, search_text, dict_cl
 	-- since choosing an action (Highlight, Wikipedia, Search, ...) ends the
 	-- whole lookup session. Their own dict_close_callbacks are skipped since
 	-- dict_close_callback (this action's own) is about to run instead.
-	self:closeAllCards(false)
+	local function proceed()
+		self:closeAllCards(false)
 
-	if action_id == ACTION_HIGHLIGHT then
-		-- Do not clear the selection before highlighting. ReaderHighlight needs
-		-- the original selected_text/hold_pos to create the annotation.
-		return self:highlightSelection(dict_self, dict_close_callback)
-	elseif action_id == ACTION_WIKIPEDIA then
-		return self:lookupWikipedia(dict_self, search_text)
-	elseif action_id == ACTION_VOCABULARY then
-		-- "Save for review": records the word in Word Review and, as part of
-		-- the same save, mirrors it into Vocabulary Builder when available,
-		-- using definition_text (the current dictionary result's own
-		-- definition, already HTML-stripped by the caller) when one was
-		-- passed in (see addSelectionToWordReview). Keep the selection/
-		-- highlight state around: unlike Highlight/Search, saving doesn't
-		-- consume the selection.
-		local result = self:addSelectionToWordReview(search_text, definition_text)
-		return result
-	elseif action_id == ACTION_TRANSLATE then
-		-- Keep the selection/highlight state around, same reasoning as
-		-- ACTION_VOCABULARY: translating doesn't consume the selection, and
-		-- the translation viewer is a separate popup layered on top.
-		return self:translateText(search_text)
+		if action_id == ACTION_HIGHLIGHT then
+			-- Do not clear the selection before highlighting. ReaderHighlight
+			-- needs the original selected_text/hold_pos to create the
+			-- annotation.
+			return self:highlightSelection(dict_self, dict_close_callback)
+		elseif action_id == ACTION_WIKIPEDIA then
+			return self:lookupWikipedia(dict_self, search_text, dict_close_callback)
+		elseif action_id == ACTION_VOCABULARY then
+			-- "Save for review": records the word in Word Review and, as part
+			-- of the same save, mirrors it into Vocabulary Builder when
+			-- available, using definition_text (the current dictionary
+			-- result's own definition, already HTML-stripped by the caller)
+			-- when one was passed in (see addSelectionToWordReview). Keep the
+			-- selection/highlight state around: unlike Highlight/Search,
+			-- saving doesn't consume the selection.
+			local result = self:addSelectionToWordReview(search_text, definition_text)
+			return result
+		elseif action_id == ACTION_TRANSLATE then
+			-- Keep the selection/highlight state around, same reasoning as
+			-- ACTION_VOCABULARY: translating doesn't consume the selection,
+			-- and the translation viewer is a separate popup layered on top.
+			return self:translateText(search_text)
+		end
+
+		-- Default: fulltext search in the book.
+		self.selection_snapshot = nil
+		self:clearOriginalHighlight(dict_self)
+		self:clearSelection()
+		if dict_close_callback then
+			pcall(dict_close_callback)
+		end
+		return self:showSearchDialog(search_text)
 	end
 
-	-- Default: fulltext search in the book.
-	self.selection_snapshot = nil
-	self:clearOriginalHighlight(dict_self)
-	self:clearSelection()
-	if dict_close_callback then
-		pcall(dict_close_callback)
+	-- Wikipedia and Translate are the only two actions here that need a
+	-- working connection. Gate them behind NetworkMgr:runWhenOnline so the
+	-- card (and any cards stacked under it) is only closed once the lookup
+	-- can actually happen. If wifi is off and the user says "no" to the
+	-- "connect to wifi?" prompt NetworkMgr shows, `proceed` above is simply
+	-- never called -- so this card stays open with the word still selected,
+	-- instead of closing while leaving the word marked with no dictionary
+	-- popup to show for it.
+	if action_id == ACTION_WIKIPEDIA or action_id == ACTION_TRANSLATE then
+		local NetworkMgr = require("ui/network/manager")
+		NetworkMgr:runWhenOnline(proceed)
+		return true
 	end
-	return self:showSearchDialog(search_text)
+
+	return proceed()
 end
 
 -- Extracts a short "quick translation" string out of a translation
@@ -8185,7 +9057,7 @@ function FloatingDictionary:buildPreviewPayload(word, result, result_index, resu
 	-- unchanged.
 	local word_counter_suffix = ""
 	if not result.no_result and result_count and result_count > 1 then
-		if style_id == POPUP_STYLE_KOBO then
+		if style_id == POPUP_STYLE_KOBO or style_id == POPUP_STYLE_KINDLE then
 			word_counter_suffix = string.format(" \xC2\xB7 %d/%d", result_index or 1, result_count)
 		else
 			dict_name = string.format("%s · %d/%d", dict_name, result_index or 1, result_count)
@@ -8199,15 +9071,79 @@ function FloatingDictionary:buildPreviewPayload(word, result, result_index, resu
 	-- the word. This is the only style-dependent branch in this function;
 	-- shown_word/dict_name/definition_html/css above are computed exactly
 	-- once, identically, for every style.
+	-- Kindle only: pull the entry's own leading pronunciation (if any) out
+	-- of the body so it can be shown next to the headword instead of
+	-- repeated inside the definition (see the module-level comment above
+	-- normalizeFloatingDictionaryHtml for why this helper lives here,
+	-- nested, instead of as a top-level local).
+	local pron_text
+	if style_id == POPUP_STYLE_KINDLE then
+		local function stripTags(fragment)
+			local text = tostring(fragment or ""):gsub("<[^>]+>", "")
+			text = text:gsub("&nbsp;", " "):gsub("&amp;", "&"):gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"')
+			return trim(text)
+		end
+
+		local function classListHasPron(classes)
+			return tostring(classes or ""):find("%f[%a]pron%f[%A]") ~= nil
+		end
+
+		local function extractLeadingPronunciation(html)
+			html = tostring(html or "")
+			-- Only scans the opening stretch of the entry: the
+			-- pronunciation always sits immediately after the headword,
+			-- never deep inside the definition, so this can never
+			-- accidentally pull a later, unrelated "pron"-classed fragment
+			-- (e.g. inside a usage example) out of the body.
+			local head = html:sub(1, 400)
+			local pos = 1
+			while true do
+				local tag_s, tag_e, classes = head:find('<span[^>]-class%s*=%s*"([^"]*)"[^>]*>', pos)
+				if not tag_s then
+					return nil, html
+				end
+				if classListHasPron(classes) then
+					local close_s = head:find("</span>", tag_e + 1, true)
+					if not close_s then
+						return nil, html
+					end
+					local close_e = close_s + 6 -- #"</span>" - 1
+					local text = stripTags(head:sub(tag_e + 1, close_s - 1))
+					if text == "" then
+						return nil, html
+					end
+					local rest = html:sub(1, tag_s - 1) .. html:sub(close_e + 1)
+					return text, rest
+				end
+				pos = tag_e + 1
+			end
+		end
+
+		pron_text, definition_html = extractLeadingPronunciation(definition_html)
+	end
+
+	local word_pron_html = ""
+	if pron_text then
+		word_pron_html = '<span class="floatingdictionary-word-pron">' .. htmlEscape(pron_text) .. "</span>"
+	end
+
 	local word_html
-	if style_id == POPUP_STYLE_KOBO and word_counter_suffix ~= "" then
-		word_html = '<div class="floatingdictionary-word">' .. htmlEscape(shown_word)
+	if (style_id == POPUP_STYLE_KOBO or style_id == POPUP_STYLE_KINDLE) and word_counter_suffix ~= "" then
+		word_html = '<div class="floatingdictionary-word">' .. htmlEscape(shown_word) .. word_pron_html
 			.. '<span class="floatingdictionary-word-counter">' .. htmlEscape(word_counter_suffix) .. "</span></div>"
 	else
-		word_html = '<div class="floatingdictionary-word">' .. htmlEscape(shown_word) .. "</div>"
+		word_html = '<div class="floatingdictionary-word">' .. htmlEscape(shown_word) .. word_pron_html .. "</div>"
 	end
 	local meta_html = '<div class="floatingdictionary-meta">' .. htmlEscape(dict_name) .. "</div>"
 	local separator_html = '<div class="floatingdictionary-separator"></div>'
+	-- Kindle only: wrap the (otherwise unstyled, dictionary-supplied)
+	-- definition markup in a class the header CSS above can target, so the
+	-- "whole body italic, source citation at the very end" look applies no
+	-- matter what raw HTML a given dictionary's entry happens to contain.
+	local body_html = definition_html
+	if style_id == POPUP_STYLE_KINDLE then
+		body_html = '<div class="floatingdictionary-body">' .. definition_html .. "</div>"
+	end
 
 	local html_body
 	if style_id == POPUP_STYLE_KOBO then
@@ -8215,6 +9151,13 @@ function FloatingDictionary:buildPreviewPayload(word, result, result_index, resu
 			word_html,
 			separator_html,
 			definition_html,
+			meta_html,
+		}, "\n")
+	elseif style_id == POPUP_STYLE_KINDLE then
+		html_body = table.concat({
+			word_html,
+			separator_html,
+			body_html,
 			meta_html,
 		}, "\n")
 	else
@@ -8245,12 +9188,11 @@ local function getResultCount(results)
 end
 
 -- translation_first (default false) swaps which group leads when
--- rank_map is nil/empty: the Language learner display mode passes true so
--- translation dictionaries come first, then monolingual definition
--- dictionaries. This is only a *fallback* grouping used for dictionaries
--- the user hasn't explicitly ranked (see rank_map below); it preserves the
--- exact previous behavior for anyone who hasn't touched the new "Dictionary
--- order" setting.
+-- rank_map is nil/empty -- currently never set to true by any caller
+-- (the old "Language learner" display mode that used to pass true has
+-- been removed). Kept as a parameter purely for backward compatibility
+-- with the ordering logic below, which still uses it as the tie-break
+-- grouping for unranked results.
 --
 -- rank_map (optional) is the { [dict_name] = rank_number } table built by
 -- FloatingDictionary:getDictionaryRankMap(), reflecting the user's manually
@@ -8353,7 +9295,7 @@ function FloatingDictionary:getResolvedLookupWord(word, results)
 	local ok, preview_results = pcall(
 		buildPreviewResults,
 		results,
-		self:getDisplayMode() == DISPLAY_MODE_LANGUAGE,
+		false,
 		self:getDictionaryRankMap()
 	)
 
@@ -8418,6 +9360,17 @@ function FloatingDictionary:showPreview(dict_self, word, results, boxes, link, d
 	local is_cascade_step = (link ~= nil or self.pending_cascade_step)
 		and #self.cascade_history > 0
 	self.pending_cascade_step = false
+
+	-- A word picked inside an open definition arrives with no selection
+	-- boxes of its own; without them the card falls back to the plain
+	-- screen-edge position. Reuse the previous card's boxes so it keeps
+	-- exactly the position the user's settings gave it.
+	if is_cascade_step and (type(boxes) ~= "table" or #boxes == 0) then
+		local previous = self.cascade_history[#self.cascade_history]
+		if previous and previous.boxes then
+			boxes = previous.boxes
+		end
+	end
 
 	local frame = {
 		word = word,
@@ -8544,7 +9497,7 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 
 	local preview_results = buildPreviewResults(
 		results,
-		self:getDisplayMode() == DISPLAY_MODE_LANGUAGE,
+		false,
 		self:getDictionaryRankMap()
 	)
 	local anchor_top = self.cascade_anchor_top
@@ -8647,10 +9600,91 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 		local search_text = self:getSearchText(word, result)
 		local preview_payload = self:buildPreviewPayload(word, result, current_index, preview_count)
 
-		local action_specs = {}
+		-- Kindle style only: the fixed "Dictionary | <buttons>" tab row from the
+		-- reference screenshot -- see FloatingDictionaryPopup.kindle_tabs and
+		-- :makeKindleTabsRow above.
+		--
+		-- "Dictionary" is always the first tab. Right after it, on the very same
+		-- row, come the buttons the user marked as shown (text buttons and
+		-- buttons from other plugins alike), in exactly the order the user
+		-- configured. Hidden buttons never appear, and each button appears
+		-- once: none of them is repeated in the footer below.
+		--
+		-- Resolves an external-plugin action (kind "external_button") to a
+		-- function that runs it, or nil when the plugin's button isn't
+		-- available for this lookup. Shared by the Kindle tab row and the
+		-- regular footer so an external button is wired up exactly the same
+		-- way in both places.
 		local external_specs
+		local function getExternalCallback(action)
+			external_specs = external_specs
+				or self:discoverExternalButtons(dict_self, word, result, current_index, results, boxes, link)
+			for _, candidate in ipairs(external_specs) do
+				if self:getExternalButtonKey(candidate) == action.ext_key then
+					return function()
+						return self:runExternalButtonCallback(dict_self, candidate)
+					end
+				end
+			end
+			return nil
+		end
+
+		local kindle_style = (preview_payload.style_id == POPUP_STYLE_KINDLE)
+		-- Under Kindle the button row is ALWAYS the tab row next to
+		-- "Dictionary" -- also while the cascade breadcrumb is showing
+		-- (the popup draws the breadcrumb above it), so the buttons never
+		-- fall back to the bottom section.
+		local kindle_tabs_shown = kindle_style
+		local kindle_tabs = nil
+		if kindle_tabs_shown then
+			kindle_tabs = {
+				{ label = _("Dictionary"), active = true },
+			}
+			-- getVisibleActions() already returns every shown button in the
+			-- exact order the user configured (text buttons and external
+			-- plugin buttons interleaved as they set them). Nothing is
+			-- reordered here: Dictionary first, then that order as-is.
+			for _, action in ipairs(self:getVisibleActions()) do
+				-- The user's own Button Text wins over the default name.
+				local tab_label = self:getActionCustomLabel(action.id) or action.label
+				if not action.kind then
+					local tab_action_id = action.id
+					table.insert(kindle_tabs, {
+						label = tab_label,
+						callback = function()
+							return self:runAction(
+								tab_action_id, dict_self, search_text, dict_close_callback)
+						end,
+					})
+				elseif action.kind == "external_button" then
+					local ext_callback = getExternalCallback(action)
+					if ext_callback then
+						table.insert(kindle_tabs, {
+							label = tab_label,
+							callback = function()
+								-- Same as a footer button tap: close this card,
+								-- then run the plugin's own callback.
+								if popup then
+									UIManager:close(popup)
+								end
+								return ext_callback()
+							end,
+						})
+					end
+					-- Nav arrows (prev/next) are the only kind that stays
+					-- on the footer.
+				end
+			end
+		end
+
+		local action_specs = {}
 		for _, action in ipairs(self:getVisibleActions()) do
-			if action.kind == "nav_prev" then
+			-- Kindle: text buttons AND external-plugin buttons already show
+			-- on the tab row next to "Dictionary"; they are never duplicated
+			-- down here. Only the prev/next arrows stay on the footer.
+			if kindle_tabs_shown and (not action.kind or action.kind == "external_button") then
+				-- skip
+			elseif action.kind == "nav_prev" then
 				local spec = self:getActionIconSpec(action.id)
 				spec.disabled = preview_count <= 1
 				table.insert(action_specs, {
@@ -8672,23 +9706,21 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 						end
 					end,
 				})
-			elseif action.kind == "external" then
-				external_specs = external_specs
-					or self:discoverExternalButtons(dict_self, word, result, current_index, results, boxes, link)
-				for _, extern_spec in ipairs(external_specs) do
+			elseif action.kind == "external_button" then
+				local ext_callback = getExternalCallback(action)
+				if ext_callback then
 					table.insert(action_specs, {
-						spec = { text = getButtonInitial(extern_spec.text) },
-						callback = function()
-							local ok, err = pcall(extern_spec.callback)
-							if not ok then
-								logger.warn("FloatingDictionary: external dict button failed:", err)
-							end
-						end,
+						spec = self:getActionIconSpec(action.id),
+						callback = ext_callback,
 					})
 				end
 			else
 				table.insert(action_specs, {
 					spec = self:getActionIconSpec(action.id),
+					-- Told to onActionButton below so it can hold off closing
+					-- this card until NetworkMgr:runWhenOnline confirms the
+					-- lookup can actually happen (see runAction).
+					needs_network = (action.id == ACTION_WIKIPEDIA or action.id == ACTION_TRANSLATE) or nil,
 					callback = function()
 						-- Only "Save for review" actually uses this; computed
 						-- lazily here (not for every action) since it's the
@@ -8726,6 +9758,7 @@ function FloatingDictionary:renderCascadeFrame(open_forward)
 			breadcrumb_callback = function(index)
 				return self:onBreadcrumbSelect(index)
 			end,
+			kindle_tabs = kindle_tabs,
 			lookup_word_callback = function(text)
 				return self:lookupSelectedWord(dict_self, text)
 			end,
@@ -8809,7 +9842,7 @@ FloatingDictionary.showFootnotePreview = FloatingDictionary.showPreview
 -- wordreview.lua) using the exact same floating popup as a normal lookup --
 -- same dictionaries, same order, same max-height/scroll behavior -- but:
 --   * no breadcrumb/cascade navigation (this isn't part of any lookup trail)
---   * a left-aligned title identifying it as a review, instead
+--   * a left-aligned title identifying it as a review
 --   * this lookup itself is never recorded into the history (it would
 --     otherwise inflate the reviewed word's own count every time it's shown)
 --
@@ -8820,7 +9853,7 @@ FloatingDictionary.showFootnotePreview = FloatingDictionary.showPreview
 function FloatingDictionary:showReviewPopup(word, results)
 	local preview_results = buildPreviewResults(
 		results,
-		self:getDisplayMode() == DISPLAY_MODE_LANGUAGE,
+		false,
 		self:getDictionaryRankMap()
 	)
 	local preview_count = #preview_results
