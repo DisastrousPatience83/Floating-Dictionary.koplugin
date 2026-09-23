@@ -23,8 +23,7 @@ The plugin also includes a configurable selection menu, per-book word review, di
 9. [Word Review](#word-review)
 10. [Fast Lookups (FastDict)](#fast-lookups-fastdict)
 11. [Updating](#updating)
-12. [Troubleshooting](#troubleshooting)
-13. [What's New in 6.2.0](#whats-new-in-620)
+12. [What's New in 6.2.0](#whats-new-in-620)
 
 ---
 
@@ -439,41 +438,6 @@ You can also update manually:
 2. Unzip it.
 3. Replace the existing `.koplugin` folder with the new version.
 4. Restart KOReader.
-
----
-
-## Troubleshooting
-
-### The AI Button or Another Plugin Button Does Not Appear
-
-Go to:
-
-**Floating Dictionary > Context menu > Other plugins**
-
-Make sure:
-
-**Show buttons from other plugins**
-
-is enabled.
-
-Then:
-
-1. Find the desired button in the list.
-2. Select it.
-3. Set it to **Show**.
-
-If the button is not listed at all, the other plugin may not be registering its button with the dictionary.
-
-Check that the other plugin is:
-
-- Installed correctly.
-- Enabled.
-- Up to date.
-- Compatible with your version of KOReader.
-
-Buttons from other plugins can also be added to the Small Selection Menu under:
-
-**Context menu > Small menu buttons**
 
 ---
 
