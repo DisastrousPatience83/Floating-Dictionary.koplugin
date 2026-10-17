@@ -176,7 +176,7 @@ The dictionary at the top of the list is given priority.
 
 Turns the FastDict lookup engine on or off.
 
-See [Fast Lookups (FastDict)]([#fast-lookups-fastdict](https://github.com/asxelot/fastdict.koplugin)) for more information.
+See [fastdict](https://github.com/asxelot/fastdict.koplugin) for more information.
 
 ---
 
